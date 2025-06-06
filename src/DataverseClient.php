@@ -4,17 +4,17 @@ namespace Drupal\dataverse_webform;
 
 use Drupal\Core\Http\ClientFactory;
 use Drupal\Core\Logger\LoggerChannelFactoryInterface;
-use Drupal\Core\Cache\CacheBackendInterface;
 use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\State\StateInterface;
 use Drupal\Core\Session\AccountProxyInterface;
 use Drupal\webform\WebformSubmissionInterface;
 use Drupal\dataverse_webform\Exception\DataverseException;
+use Drupal\dataverse_webform\Cache\DataverseCacheManager;
 use GuzzleHttp\Exception\RequestException;
 use Drupal\Core\StringTranslation\StringTranslationTrait;
 
 /**
- * Dataverse client service for OData API integration with multi-entity support.
+ * Dataverse client service for OData API integration with enhanced caching.
  */
 class DataverseClient implements DataverseClientInterface {
   
@@ -61,9 +61,9 @@ class DataverseClient implements DataverseClientInterface {
   protected AzureAdAuthService $azureAuth;
 
   /**
-   * The cache backend.
+   * The cache manager.
    */
-  protected CacheBackendInterface $cache;
+  protected DataverseCacheManager $cacheManager;
 
   /**
    * The validation service.
@@ -99,8 +99,8 @@ class DataverseClient implements DataverseClientInterface {
    *   The logger factory.
    * @param \Drupal\dataverse_webform\AzureAdAuthService $azure_auth
    *   The Azure AD authentication service.
-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache
-   *   The cache backend.
+   * @param \Drupal\dataverse_webform\Cache\DataverseCacheManager $cache_manager
+   *   The cache manager.
    * @param \Drupal\dataverse_webform\ValidationService $validator
    *   The validation service.
    * @param \Drupal\dataverse_webform\SubmissionProcessor $submission_processor
@@ -116,7 +116,7 @@ class DataverseClient implements DataverseClientInterface {
     ClientFactory $http_client_factory,
     LoggerChannelFactoryInterface $logger_factory,
     AzureAdAuthService $azure_auth,
-    CacheBackendInterface $cache,
+    DataverseCacheManager $cache_manager,
     ValidationService $validator,
     SubmissionProcessor $submission_processor,
     ConfigFactoryInterface $config_factory,
@@ -126,7 +126,7 @@ class DataverseClient implements DataverseClientInterface {
     $this->httpClientFactory = $http_client_factory;
     $this->loggerFactory = $logger_factory;
     $this->azureAuth = $azure_auth;
-    $this->cache = $cache;
+    $this->cacheManager = $cache_manager;
     $this->validator = $validator;
     $this->submissionProcessor = $submission_processor;
     $this->configFactory = $config_factory;
@@ -243,6 +243,12 @@ class DataverseClient implements DataverseClientInterface {
       // Check rate limit
       $this->checkRateLimit();
 
+      // Check cached validation result first
+      $cached_result = $this->cacheManager->getCachedTokenValidation($config);
+      if ($cached_result !== NULL) {
+        return $cached_result;
+      }
+
       $this->validator->validateConfig($config);
       
       $access_token = $this->azureAuth->getAccessToken($config);
@@ -260,6 +266,9 @@ class DataverseClient implements DataverseClientInterface {
 
       $success = $response->getStatusCode() === 200;
       
+      // Cache the result
+      $this->cacheManager->setCachedTokenValidation($config, $success);
+      
       if ($success) {
         $this->recordApiCall();
       }
@@ -271,6 +280,10 @@ class DataverseClient implements DataverseClientInterface {
         'Dataverse connection test failed: @error',
         ['@error' => $e->getMessage()]
       );
+      
+      // Cache negative result for shorter time
+      $this->cacheManager->setCachedTokenValidation($config, FALSE);
+      
       throw new DataverseException('Connection test failed: ' . $e->getMessage(), 0, $e);
     }
   }
@@ -279,16 +292,10 @@ class DataverseClient implements DataverseClientInterface {
    * {@inheritdoc}
    */
   public function getEntities(array $config): array {
-    // Generate cache key based on relevant config only
-    $cache_config = array_intersect_key($config, array_flip([
-      'dataverse_url', 
-      'azure_tenant_id'
-    ]));
-    $cache_key = 'dataverse_webform:entities:' . hash('sha256', json_encode($cache_config));
-    
-    $cached = $this->cache->get($cache_key);
-    if ($cached && $cached->data) {
-      return $cached->data;
+    // Try to get cached entities first
+    $cached_entities = $this->cacheManager->getCachedEntities($config);
+    if ($cached_entities !== NULL) {
+      return $cached_entities;
     }
 
     try {
@@ -344,14 +351,8 @@ class DataverseClient implements DataverseClientInterface {
           }
         }
 
-        // Cache with proper tags for selective invalidation
-        $cache_tags = [
-          'dataverse_webform:entities',
-          'dataverse_webform:config:' . hash('sha256', $config['dataverse_url']),
-          'dataverse_webform:metadata',
-        ];
-        
-        $this->cache->set($cache_key, $entities, time() + 3600, $cache_tags);
+        // Cache the entities with long TTL since they change infrequently
+        $this->cacheManager->setCachedEntities($config, $entities, DataverseCacheManager::LONG_TTL);
         
         // Record successful API call
         $this->recordApiCall();
@@ -374,16 +375,10 @@ class DataverseClient implements DataverseClientInterface {
   public function getEntityFields(array $config, string $entity_name): array {
     $this->validator->validateEntityName($entity_name);
     
-    // Generate cache key with entity-specific information
-    $cache_config = array_intersect_key($config, array_flip([
-      'dataverse_url', 
-      'azure_tenant_id'
-    ]));
-    $cache_key = 'dataverse_webform:fields:' . $entity_name . ':' . hash('sha256', json_encode($cache_config));
-    
-    $cached = $this->cache->get($cache_key);
-    if ($cached && $cached->data) {
-      return $cached->data;
+    // Try to get cached fields first
+    $cached_fields = $this->cacheManager->getCachedEntityFields($config, $entity_name);
+    if ($cached_fields !== NULL) {
+      return $cached_fields;
     }
 
     try {
@@ -445,15 +440,8 @@ class DataverseClient implements DataverseClientInterface {
         // Sort by display name
         uasort($fields, fn($a, $b) => strcmp($a['display_name'], $b['display_name']));
 
-        // Cache with proper tags
-        $cache_tags = [
-          'dataverse_webform:fields',
-          'dataverse_webform:fields:' . $entity_name,
-          'dataverse_webform:config:' . hash('sha256', $config['dataverse_url']),
-          'dataverse_webform:metadata',
-        ];
-        
-        $this->cache->set($cache_key, $fields, time() + 3600, $cache_tags);
+        // Cache the fields
+        $this->cacheManager->setCachedEntityFields($config, $entity_name, $fields);
         
         // Record successful API call
         $this->recordApiCall();
@@ -590,6 +578,31 @@ class DataverseClient implements DataverseClientInterface {
     }
 
     return $validation_results;
+  }
+
+  /**
+   * Invalidate configuration caches when configuration changes.
+   *
+   * @param array $config
+   *   The configuration that changed.
+   */
+  public function invalidateConfigurationCache(array $config): void {
+    $this->cacheManager->invalidateConfigCache($config);
+    $this->azureAuth->invalidateToken($config);
+    
+    $this->loggerFactory->get('dataverse_webform')->info(
+      'Invalidated caches for Dataverse configuration'
+    );
+  }
+
+  /**
+   * Get cache manager for external access.
+   *
+   * @return \Drupal\dataverse_webform\Cache\DataverseCacheManager
+   *   The cache manager.
+   */
+  public function getCacheManager(): DataverseCacheManager {
+    return $this->cacheManager;
   }
 
   /**

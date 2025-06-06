@@ -9,13 +9,20 @@ services:
       - '@config.factory'
       - '@lock'
   
+  dataverse_webform.cache_manager:
+    class: Drupal\dataverse_webform\Cache\DataverseCacheManager
+    arguments:
+      - '@cache.default'
+      - '@config.factory'
+      - '@logger.factory'
+  
   dataverse_webform.dataverse_client:
     class: Drupal\dataverse_webform\DataverseClient
     arguments: 
       - '@http_client_factory'
       - '@logger.factory'
       - '@dataverse_webform.azure_auth'
-      - '@cache.default'
+      - '@dataverse_webform.cache_manager'
       - '@dataverse_webform.validator'
       - '@dataverse_webform.submission_processor'
       - '@config.factory'
@@ -38,3 +45,29 @@ services:
     arguments:
       - '@key.repository'
       - '@dataverse_webform.validator'
+
+  dataverse_webform.submission_handler:
+    class: Drupal\dataverse_webform\Service\WebformSubmissionHandler
+    arguments:
+      - '@dataverse_webform.dataverse_client'
+      - '@logger.factory'
+      - '@config.factory'
+      - '@state'
+      - '@queue'
+      - '@current_user'
+      - '@dataverse_webform.cache_manager'
+
+  dataverse_webform.form_builder:
+    class: Drupal\dataverse_webform\Form\WebformSettingsFormBuilder
+    arguments:
+      - '@dataverse_webform.config_manager'
+      - '@dataverse_webform.dataverse_client'
+      - '@dataverse_webform.cache_manager'
+      - '@logger.factory'
+      - '@module_handler'
+
+  dataverse_webform.queue_processor:
+    class: Drupal\dataverse_webform\Plugin\QueueWorker\DataverseSubmissionProcessor
+    arguments:
+      - '@dataverse_webform.submission_handler'
+      - '@logger.factory'
