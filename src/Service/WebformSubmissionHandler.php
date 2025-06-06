@@ -49,6 +49,9 @@ class WebformSubmissionHandler {
     $this->cacheManager = $cache_manager;
   }
 
+  /**
+   * Process webform submission.
+   */
   public function processSubmission(WebformSubmissionInterface $webform_submission): void {
     $webform = $webform_submission->getWebform();
     $dataverse_config = $webform->getThirdPartySetting('dataverse_webform', 'dataverse_config');
@@ -66,6 +69,9 @@ class WebformSubmissionHandler {
     }
   }
 
+  /**
+   * Process submission immediately.
+   */
   public function processSubmissionImmediate(WebformSubmissionInterface $webform_submission, array $dataverse_config): void {
     $start_time = microtime(true);
 
@@ -82,6 +88,9 @@ class WebformSubmissionHandler {
     }
   }
 
+  /**
+   * Queue submission for processing.
+   */
   public function queueSubmissionForProcessing(WebformSubmissionInterface $webform_submission, array $dataverse_config): void {
     $queue = $this->queueFactory->get(self::QUEUE_NAME);
     
@@ -99,6 +108,9 @@ class WebformSubmissionHandler {
     );
   }
 
+  /**
+   * Process queued submission.
+   */
   public function processQueuedSubmission(array $queue_item_data): bool {
     $submission_id = $queue_item_data['submission_id'];
     $config = $queue_item_data['config'];
@@ -120,6 +132,9 @@ class WebformSubmissionHandler {
     }
   }
 
+  /**
+   * Get submission statistics.
+   */
   public function getSubmissionStatistics(?string $webform_id = null): array {
     $stats = $this->getSubmissionStats($webform_id);
     $queue = $this->queueFactory->get(self::QUEUE_NAME);
@@ -128,6 +143,9 @@ class WebformSubmissionHandler {
     return $stats;
   }
 
+  /**
+   * Clear submission statistics.
+   */
   public function clearSubmissionStatistics(?string $webform_id = null): void {
     $stats_key = $this->buildStatsKey($webform_id);
     $this->state->delete($stats_key);
@@ -138,6 +156,9 @@ class WebformSubmissionHandler {
     );
   }
 
+  /**
+   * Determine if submission should be processed immediately.
+   */
   protected function shouldProcessImmediately(WebformSubmissionInterface $webform_submission, array $dataverse_config): bool {
     $global_config = $this->configFactory->get('dataverse_webform.settings');
     
@@ -146,17 +167,23 @@ class WebformSubmissionHandler {
            $this->isSubmissionSimple($webform_submission, $dataverse_config);
   }
 
+  /**
+   * Check if resources are available for immediate processing.
+   */
   protected function hasAvailableResources(): bool {
-    // Check memory usage
+    // Check memory usage.
     if (memory_get_usage() > self::MEMORY_THRESHOLD) {
       return false;
     }
 
-    // Check execution time limits
+    // Check execution time limits.
     $max_execution_time = ini_get('max_execution_time');
     return $max_execution_time <= 0 || $max_execution_time >= self::TIME_THRESHOLD;
   }
 
+  /**
+   * Check if submission is simple enough for immediate processing.
+   */
   protected function isSubmissionSimple(WebformSubmissionInterface $webform_submission, array $dataverse_config): bool {
     $field_mappings = $dataverse_config['field_mappings'] ?? [];
     $entity_count = count(array_unique(array_column($field_mappings, 'entity')));
@@ -169,6 +196,9 @@ class WebformSubmissionHandler {
     return strlen(serialize($submission_data)) <= self::MAX_SERIALIZED_SIZE;
   }
 
+  /**
+   * Validate submission before processing.
+   */
   protected function validateSubmissionPreProcessing(WebformSubmissionInterface $webform_submission, array $dataverse_config): void {
     $cached_validation = $this->cacheManager->getCachedConfigValidation($dataverse_config);
     if ($cached_validation === null || !$cached_validation['valid']) {
@@ -185,11 +215,17 @@ class WebformSubmissionHandler {
     }
   }
 
+  /**
+   * Handle successful submission.
+   */
   protected function handleSubmissionSuccess(WebformSubmissionInterface $webform_submission, array $results, float $start_time): void {
     $this->recordSubmissionSuccess($webform_submission, $results, $start_time);
     $this->logSubmissionResults($webform_submission, $results);
   }
 
+  /**
+   * Handle submission error.
+   */
   protected function handleSubmissionError(WebformSubmissionInterface $webform_submission, array $dataverse_config, DataverseException $e, float $start_time): void {
     $this->recordSubmissionFailure($webform_submission, $e, $start_time);
     
@@ -209,6 +245,9 @@ class WebformSubmissionHandler {
     }
   }
 
+  /**
+   * Handle unexpected error.
+   */
   protected function handleUnexpectedError(WebformSubmissionInterface $webform_submission, \Exception $e, float $start_time): void {
     $this->recordSubmissionFailure($webform_submission, $e, $start_time);
     
@@ -223,6 +262,9 @@ class WebformSubmissionHandler {
     );
   }
 
+  /**
+   * Log submission results.
+   */
   protected function logSubmissionResults(WebformSubmissionInterface $webform_submission, array $results): void {
     $logger = $this->loggerFactory->get('dataverse_webform');
     $successful_entities = [];
@@ -256,6 +298,9 @@ class WebformSubmissionHandler {
     }
   }
 
+  /**
+   * Check if submission should be retried.
+   */
   protected function shouldRetrySubmission(WebformSubmissionInterface $webform_submission, array $dataverse_config): bool {
     $max_retries = $dataverse_config['retry_attempts'] ?? 3;
     $retry_key = 'dataverse_webform:retry:' . $webform_submission->id();
@@ -264,6 +309,9 @@ class WebformSubmissionHandler {
     return $retry_count < $max_retries;
   }
 
+  /**
+   * Schedule retry for failed submission.
+   */
   protected function scheduleRetry(WebformSubmissionInterface $webform_submission, array $dataverse_config, \Exception $exception): void {
     $retry_key = 'dataverse_webform:retry:' . $webform_submission->id();
     $retry_count = $this->state->get($retry_key, 0) + 1;
@@ -285,6 +333,9 @@ class WebformSubmissionHandler {
     $this->updateSubmissionStats($webform_submission->getWebform()->id(), 'retry_submissions', 1);
   }
 
+  /**
+   * Build queue item data.
+   */
   protected function buildQueueItem(WebformSubmissionInterface $webform_submission, array $dataverse_config): array {
     return [
       'submission_id' => $webform_submission->id(),
@@ -296,8 +347,13 @@ class WebformSubmissionHandler {
     ];
   }
 
+  /**
+   * Load submission by ID.
+   */
   protected function loadSubmission(string $submission_id): ?WebformSubmissionInterface {
+    /** @var \Drupal\webform\WebformSubmissionStorageInterface $submission_storage */
     $submission_storage = \Drupal::entityTypeManager()->getStorage('webform_submission');
+    /** @var \Drupal\webform\WebformSubmissionInterface|null $webform_submission */
     $webform_submission = $submission_storage->load($submission_id);
 
     if (!$webform_submission) {
@@ -310,10 +366,16 @@ class WebformSubmissionHandler {
     return $webform_submission;
   }
 
+  /**
+   * Record submission attempt.
+   */
   protected function recordSubmissionAttempt(WebformSubmissionInterface $webform_submission): void {
     $this->updateSubmissionStats($webform_submission->getWebform()->id(), 'total_submissions', 1);
   }
 
+  /**
+   * Record successful submission.
+   */
   protected function recordSubmissionSuccess(WebformSubmissionInterface $webform_submission, array $results, float $start_time): void {
     $processing_time = microtime(true) - $start_time;
     $webform_id = $webform_submission->getWebform()->id();
@@ -322,35 +384,50 @@ class WebformSubmissionHandler {
     $this->updateSubmissionStats($webform_id, 'total_processing_time', $processing_time);
   }
 
+  /**
+   * Record failed submission.
+   */
   protected function recordSubmissionFailure(WebformSubmissionInterface $webform_submission, \Exception $exception, float $start_time): void {
     $this->updateSubmissionStats($webform_submission->getWebform()->id(), 'failed_submissions', 1);
   }
 
+  /**
+   * Update submission statistics.
+   */
   protected function updateSubmissionStats(string $webform_id, string $stat_name, $increment): void {
     $current_time = time();
     
-    // Update global stats
+    // Update global stats.
     $global_stats = $this->getSubmissionStats();
     $global_stats[$stat_name] = ($global_stats[$stat_name] ?? 0) + $increment;
     $global_stats['last_updated'] = $current_time;
     $this->state->set('dataverse_webform:stats', $global_stats);
 
-    // Update webform-specific stats
+    // Update webform-specific stats.
     $webform_stats = $this->getSubmissionStats($webform_id);
     $webform_stats[$stat_name] = ($webform_stats[$stat_name] ?? 0) + $increment;
     $webform_stats['last_updated'] = $current_time;
     $this->state->set('dataverse_webform:stats:' . $webform_id, $webform_stats);
   }
 
+  /**
+   * Get submission statistics.
+   */
   protected function getSubmissionStats(?string $webform_id = null): array {
     $stats_key = $this->buildStatsKey($webform_id);
     return $this->state->get($stats_key, $this->getDefaultStats());
   }
 
+  /**
+   * Build statistics key.
+   */
   protected function buildStatsKey(?string $webform_id): string {
     return 'dataverse_webform:stats' . ($webform_id ? ':' . $webform_id : '');
   }
 
+  /**
+   * Get default statistics structure.
+   */
   protected function getDefaultStats(): array {
     return [
       'total_submissions' => 0,

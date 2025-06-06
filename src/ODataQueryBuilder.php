@@ -38,6 +38,9 @@ class ODataQueryBuilder {
     }
   }
 
+  /**
+   * Add select fields to query.
+   */
   public function select(array $fields): self {
     foreach ($fields as $field) {
       $sanitized_field = $this->sanitizeIdentifier($field);
@@ -49,6 +52,9 @@ class ODataQueryBuilder {
     return $this;
   }
 
+  /**
+   * Add filter condition to query.
+   */
   public function filter(string $field, string $operator, $value): self {
     $sanitized_field = $this->sanitizeIdentifier($field);
     if (empty($sanitized_field)) {
@@ -62,6 +68,9 @@ class ODataQueryBuilder {
     return $this;
   }
 
+  /**
+   * Add raw filter (use with caution).
+   */
   public function rawFilter(string $filter): self {
     if (preg_match(self::DANGEROUS_CHARS_PATTERN, $filter)) {
       throw DataverseException::validationError('Raw filter contains potentially dangerous characters');
@@ -71,6 +80,9 @@ class ODataQueryBuilder {
     return $this;
   }
 
+  /**
+   * Add AND conditions.
+   */
   public function andWhere(array $conditions): self {
     foreach ($conditions as $condition) {
       $this->validateCondition($condition);
@@ -79,6 +91,9 @@ class ODataQueryBuilder {
     return $this;
   }
 
+  /**
+   * Add OR conditions.
+   */
   public function orWhere(array $conditions): self {
     $or_filters = [];
     
@@ -99,6 +114,9 @@ class ODataQueryBuilder {
     return $this;
   }
 
+  /**
+   * Add order by clause.
+   */
   public function orderBy(string $field, string $direction = 'asc'): self {
     $sanitized_field = $this->sanitizeIdentifier($field);
     if (empty($sanitized_field)) {
@@ -111,6 +129,9 @@ class ODataQueryBuilder {
     return $this;
   }
 
+  /**
+   * Set top limit.
+   */
   public function top(int $limit): self {
     if ($limit < 1 || $limit > self::MAX_TOP_LIMIT) {
       throw DataverseException::validationError("Top limit must be between 1 and " . self::MAX_TOP_LIMIT);
@@ -120,6 +141,9 @@ class ODataQueryBuilder {
     return $this;
   }
 
+  /**
+   * Set skip offset.
+   */
   public function skip(int $offset): self {
     if ($offset < 0) {
       throw DataverseException::validationError('Skip offset cannot be negative');
@@ -129,6 +153,9 @@ class ODataQueryBuilder {
     return $this;
   }
 
+  /**
+   * Add expand relationships.
+   */
   public function expand(array $relationships): self {
     foreach ($relationships as $relationship) {
       $sanitized_relationship = $this->sanitizeIdentifier($relationship);
@@ -140,11 +167,17 @@ class ODataQueryBuilder {
     return $this;
   }
 
+  /**
+   * Include count in result.
+   */
   public function count(bool $include_count = true): self {
     $this->count = $include_count;
     return $this;
   }
 
+  /**
+   * Build complete query URL.
+   */
   public function build(): string {
     $url = $this->entitySet;
     $query_params = $this->buildQueryParameters();
@@ -160,6 +193,9 @@ class ODataQueryBuilder {
     return $url;
   }
 
+  /**
+   * Reset query builder to initial state.
+   */
   public function reset(): self {
     $this->select = [];
     $this->filters = [];
@@ -171,22 +207,37 @@ class ODataQueryBuilder {
     return $this;
   }
 
+  /**
+   * Clone query builder.
+   */
   public function clone(): self {
     return clone $this;
   }
 
+  /**
+   * Get entity set name.
+   */
   public function getEntitySet(): string {
     return $this->entitySet;
   }
 
+  /**
+   * Check if query has filters.
+   */
   public function hasFilters(): bool {
     return !empty($this->filters);
   }
 
+  /**
+   * Get filter count.
+   */
   public function getFilterCount(): int {
     return count($this->filters);
   }
 
+  /**
+   * Build query parameters array.
+   */
   protected function buildQueryParameters(): array {
     $query_params = [];
 
@@ -221,12 +272,18 @@ class ODataQueryBuilder {
     return $query_params;
   }
 
+  /**
+   * Validate condition structure.
+   */
   protected function validateCondition(array $condition): void {
     if (!isset($condition['field'], $condition['operator'], $condition['value'])) {
       throw DataverseException::validationError('Each filter condition must have field, operator, and value');
     }
   }
 
+  /**
+   * Sanitize identifier (field names, etc).
+   */
   protected function sanitizeIdentifier(string $identifier): string {
     if (strlen($identifier) > self::MAX_IDENTIFIER_LENGTH) {
       return '';
@@ -239,6 +296,9 @@ class ODataQueryBuilder {
     return $identifier;
   }
 
+  /**
+   * Sanitize operator.
+   */
   protected function sanitizeOperator(string $operator): string {
     $operator = strtolower(trim($operator));
     
@@ -249,16 +309,22 @@ class ODataQueryBuilder {
     return $operator;
   }
 
+  /**
+   * Sanitize direction.
+   */
   protected function sanitizeDirection(string $direction): string {
     $direction = strtolower(trim($direction));
     
     if (!in_array($direction, self::ALLOWED_DIRECTIONS)) {
-      return 'asc'; // Default to ascending
+      return 'asc'; // Default to ascending.
     }
     
     return $direction;
   }
 
+  /**
+   * Sanitize value for OData query.
+   */
   protected function sanitizeValue($value): string {
     if ($value === null) {
       return 'null';
@@ -287,16 +353,22 @@ class ODataQueryBuilder {
     throw DataverseException::validationError('Unsupported value type for OData query: ' . gettype($value));
   }
 
+  /**
+   * Sanitize string value.
+   */
   protected function sanitizeStringValue(string $value): string {
     if (strlen($value) > self::MAX_STRING_LENGTH) {
       throw DataverseException::validationError('String value exceeds maximum length of ' . self::MAX_STRING_LENGTH . ' characters');
     }
     
-    // Escape single quotes for OData
+    // Escape single quotes for OData.
     $escaped = str_replace("'", "''", $value);
     return "'{$escaped}'";
   }
 
+  /**
+   * Sanitize array value.
+   */
   protected function sanitizeArrayValue(array $value): string {
     $sanitized_items = [];
     foreach ($value as $item) {

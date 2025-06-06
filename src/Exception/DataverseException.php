@@ -35,14 +35,23 @@ class DataverseException extends \Exception {
     $this->context = $context;
   }
 
+  /**
+   * Get Dataverse-specific error code.
+   */
   public function getDataverseErrorCode(): ?string {
     return $this->dataverseErrorCode;
   }
 
+  /**
+   * Get error context.
+   */
   public function getContext(): array {
     return $this->context;
   }
 
+  /**
+   * Check if this is an authentication error.
+   */
   public function isAuthenticationError(): bool {
     $auth_indicators = [
       'unauthorized', 'invalid_token', 'token_expired', 
@@ -53,12 +62,18 @@ class DataverseException extends \Exception {
     return $this->hasErrorIndicator($auth_indicators);
   }
 
+  /**
+   * Check if this is a rate limit error.
+   */
   public function isRateLimitError(): bool {
     return $this->getCode() === 429 || 
            $this->dataverseErrorCode === self::ERROR_TYPE_RATE_LIMIT ||
            $this->hasErrorIndicator(['rate limit', 'throttled', 'quota exceeded', 'too many requests']);
   }
 
+  /**
+   * Check if this is a validation error.
+   */
   public function isValidationError(): bool {
     $validation_indicators = [
       'invalid_request', self::ERROR_TYPE_VALIDATION, 'bad_request', 
@@ -68,8 +83,11 @@ class DataverseException extends \Exception {
     return $this->getCode() === 400 || $this->hasErrorIndicator($validation_indicators);
   }
 
+  /**
+   * Check if error is retryable.
+   */
   public function isRetryable(): bool {
-    // Rate limits and server errors are typically retryable
+    // Rate limits and server errors are typically retryable.
     if ($this->isRateLimitError() || $this->getCode() >= 500) {
       return true;
     }
@@ -81,6 +99,9 @@ class DataverseException extends \Exception {
     return $this->hasErrorIndicator($retryable_indicators);
   }
 
+  /**
+   * Check if this is a network error.
+   */
   public function isNetworkError(): bool {
     $network_indicators = [
       self::ERROR_TYPE_NETWORK, 'connection_timeout', 'dns_error', 'ssl_error',
@@ -90,6 +111,9 @@ class DataverseException extends \Exception {
     return $this->hasErrorIndicator($network_indicators);
   }
 
+  /**
+   * Get error severity level.
+   */
   public function getSeverity(): string {
     if ($this->isAuthenticationError()) {
       return self::SEVERITY_CRITICAL;
@@ -110,6 +134,9 @@ class DataverseException extends \Exception {
     return self::SEVERITY_INFO;
   }
 
+  /**
+   * Get formatted error message.
+   */
   public function getFormattedMessage(): string {
     $message = $this->getMessage();
     
@@ -124,6 +151,9 @@ class DataverseException extends \Exception {
     return $message;
   }
 
+  /**
+   * Get context for logging.
+   */
   public function getLogContext(): array {
     return array_merge($this->context, [
       'exception_type' => get_class($this),
@@ -133,6 +163,9 @@ class DataverseException extends \Exception {
     ]);
   }
 
+  /**
+   * Create exception from HTTP response.
+   */
   public static function fromHttpResponse(ResponseInterface $response, string $operation = 'request'): self {
     $status_code = $response->getStatusCode();
     $body = $response->getBody()->getContents();
@@ -145,7 +178,7 @@ class DataverseException extends \Exception {
       $dataverse_error_code = $error_data['error']['code'] ?? $error_data['error'] ?? null;
       $context['response_data'] = $error_data;
       
-      // Extract additional error details
+      // Extract additional error details.
       if (isset($error_data['error']['message'])) {
         $context['error_details'] = $error_data['error']['message'];
       }
@@ -156,6 +189,9 @@ class DataverseException extends \Exception {
     return new self($message, $status_code, null, $dataverse_error_code, $context);
   }
 
+  /**
+   * Create configuration error.
+   */
   public static function configurationError(string $message, array $context = []): self {
     return new self(
       "Configuration error: {$message}",
@@ -166,6 +202,9 @@ class DataverseException extends \Exception {
     );
   }
 
+  /**
+   * Create authentication error.
+   */
   public static function authenticationError(string $message, array $context = []): self {
     return new self(
       "Authentication error: {$message}",
@@ -176,6 +215,9 @@ class DataverseException extends \Exception {
     );
   }
 
+  /**
+   * Create validation error.
+   */
   public static function validationError(string $message, array $context = []): self {
     return new self(
       "Validation error: {$message}",
@@ -186,6 +228,9 @@ class DataverseException extends \Exception {
     );
   }
 
+  /**
+   * Create network error.
+   */
   public static function networkError(string $message, array $context = []): self {
     return new self(
       "Network error: {$message}",
@@ -196,6 +241,9 @@ class DataverseException extends \Exception {
     );
   }
 
+  /**
+   * Create rate limit error.
+   */
   public static function rateLimitError(string $message, array $context = []): self {
     return new self(
       "Rate limit error: {$message}",
@@ -206,6 +254,9 @@ class DataverseException extends \Exception {
     );
   }
 
+  /**
+   * Build error message from response data.
+   */
   protected static function buildErrorMessage(string $operation, int $status_code, ?string $error_code, ?array $error_data): string {
     $message = "Dataverse {$operation} failed (HTTP {$status_code})";
     
@@ -220,6 +271,9 @@ class DataverseException extends \Exception {
     return $message;
   }
 
+  /**
+   * Check if error message contains indicators.
+   */
   protected function hasErrorIndicator(array $indicators): bool {
     $message_lower = strtolower($this->getMessage());
     $error_code_lower = strtolower($this->dataverseErrorCode ?? '');

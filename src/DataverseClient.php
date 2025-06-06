@@ -22,7 +22,7 @@ class DataverseClient implements DataverseClientInterface {
   public const MAX_BATCH_SIZE = 100;
   public const DEFAULT_TIMEOUT = 30;
   public const DEFAULT_RATE_LIMIT = 100;
-  public const RATE_LIMIT_WINDOW = 3600; // 1 hour in seconds
+  public const RATE_LIMIT_WINDOW = 3600;
   public const SUCCESS_STATUS_MIN = 200;
   public const SUCCESS_STATUS_MAX = 299;
 
@@ -58,6 +58,9 @@ class DataverseClient implements DataverseClientInterface {
     $this->currentUser = $current_user;
   }
 
+  /**
+   * {@inheritdoc}
+   */
   public function submitToDataverse(WebformSubmissionInterface $submission, array $config): array {
     $this->checkRateLimit();
     $this->validator->validateConfig($config);
@@ -74,6 +77,9 @@ class DataverseClient implements DataverseClientInterface {
     return $results;
   }
 
+  /**
+   * {@inheritdoc}
+   */
   public function testConnection(array $config): bool {
     $cached_result = $this->cacheManager->getCachedTokenValidation($config);
     if ($cached_result !== null) {
@@ -84,18 +90,10 @@ class DataverseClient implements DataverseClientInterface {
     $this->validator->validateConfig($config);
     
     try {
-      $access_token = $this->azureAuth->getAccessToken($config);
-      if (!$access_token) {
-        throw new DataverseException('Failed to obtain access token');
-      }
-
-      $client = $this->createHttpClient($config);
-      $response = $client->get('$metadata', [
-        'headers' => $this->buildHeaders($access_token, ['Accept' => 'application/xml']),
-        'timeout' => 10,
-      ]);
-
+      $access_token = $this->getValidAccessToken($config);
+      $response = $this->executeMetadataRequest($config, $access_token);
       $success = $this->isSuccessResponse($response);
+      
       $this->cacheManager->setCachedTokenValidation($config, $success);
       
       if ($success) {
@@ -108,6 +106,9 @@ class DataverseClient implements DataverseClientInterface {
     }
   }
 
+  /**
+   * {@inheritdoc}
+   */
   public function getEntities(array $config): array {
     $cached_entities = $this->cacheManager->getCachedEntities($config);
     if ($cached_entities !== null) {
@@ -133,6 +134,9 @@ class DataverseClient implements DataverseClientInterface {
     }
   }
 
+  /**
+   * {@inheritdoc}
+   */
   public function getEntityFields(array $config, string $entity_name): array {
     $this->validator->validateEntityName($entity_name);
     
@@ -160,6 +164,9 @@ class DataverseClient implements DataverseClientInterface {
     }
   }
 
+  /**
+   * {@inheritdoc}
+   */
   public function createEntity(array $config, string $entity_name, array $data): array {
     $this->validator->validateEntityName($entity_name);
     $this->validator->validateEntityData($data);
@@ -169,12 +176,7 @@ class DataverseClient implements DataverseClientInterface {
     $sanitized_data = $this->submissionProcessor->sanitizeEntityData($data);
 
     try {
-      $response = $this->createHttpClient($config)->post($entity_name, [
-        'headers' => $this->buildHeaders($access_token, ['Content-Type' => 'application/json']),
-        'json' => $sanitized_data,
-        'timeout' => $config['timeout'] ?? self::DEFAULT_TIMEOUT,
-      ]);
-
+      $response = $this->executeEntityCreationRequest($config, $entity_name, $sanitized_data, $access_token);
       $this->validateResponseStatus($response, 'Entity creation failed');
       $this->recordApiCall();
       
@@ -184,14 +186,15 @@ class DataverseClient implements DataverseClientInterface {
     }
   }
 
+  /**
+   * {@inheritdoc}
+   */
   public function batchCreateEntities(array $config, array $entities_data): array {
     $batch_size = min($config['batch_size'] ?? 10, self::MAX_BATCH_SIZE);
     $results = [];
 
     foreach (array_chunk($entities_data, $batch_size, true) as $batch) {
-      foreach ($batch as $entity_name => $entity_data) {
-        $results[$entity_name] = $this->createSingleEntityWithErrorHandling($config, $entity_name, $entity_data);
-      }
+      $results = array_merge($results, $this->processBatch($config, $batch));
       
       if (count($entities_data) > $batch_size) {
         usleep(100000); // 100ms delay between batches
@@ -201,6 +204,9 @@ class DataverseClient implements DataverseClientInterface {
     return $results;
   }
 
+  /**
+   * {@inheritdoc}
+   */
   public function validateFieldMappings(array $config, array $field_mappings): array {
     $validation_results = [];
     $entities = $this->getEntities($config);
@@ -212,15 +218,24 @@ class DataverseClient implements DataverseClientInterface {
     return $validation_results;
   }
 
+  /**
+   * Invalidate configuration cache.
+   */
   public function invalidateConfigurationCache(array $config): void {
     $this->cacheManager->invalidateConfigCache($config);
     $this->azureAuth->invalidateToken($config);
   }
 
+  /**
+   * Get cache manager.
+   */
   public function getCacheManager(): DataverseCacheManager {
     return $this->cacheManager;
   }
 
+  /**
+   * Process submission data into entities.
+   */
   protected function processSubmissionData(WebformSubmissionInterface $submission, array $config): array {
     $submission_data = $submission->getData();
     $field_mappings = $config['field_mappings'] ?? [];
@@ -237,6 +252,9 @@ class DataverseClient implements DataverseClientInterface {
     return $entities_data;
   }
 
+  /**
+   * Add submission metadata to entities.
+   */
   protected function addSubmissionMetadata(array &$entities_data, WebformSubmissionInterface $submission): void {
     $metadata = [
       'dataverse_webform_submission_id' => $submission->id(),
@@ -249,6 +267,9 @@ class DataverseClient implements DataverseClientInterface {
     }
   }
 
+  /**
+   * Submit entities in specified order.
+   */
   protected function submitEntitiesInOrder(array $entities_data, array $config): array {
     $submission_order = $config['submission_order'] ?? array_keys($entities_data);
     $results = [];
@@ -272,6 +293,9 @@ class DataverseClient implements DataverseClientInterface {
     return $results;
   }
 
+  /**
+   * Create single entity with error handling.
+   */
   protected function createSingleEntityWithErrorHandling(array $config, string $entity_name, array $entity_data): array {
     try {
       $result = $this->createEntity($config, $entity_name, $entity_data);
@@ -289,6 +313,22 @@ class DataverseClient implements DataverseClientInterface {
     }
   }
 
+  /**
+   * Process a batch of entities.
+   */
+  protected function processBatch(array $config, array $batch): array {
+    $results = [];
+    
+    foreach ($batch as $entity_name => $entity_data) {
+      $results[$entity_name] = $this->createSingleEntityWithErrorHandling($config, $entity_name, $entity_data);
+    }
+    
+    return $results;
+  }
+
+  /**
+   * Validate single field mapping.
+   */
   protected function validateSingleMapping(array $config, array $mapping, array $entities): array {
     $entity_name = $mapping['entity'] ?? '';
     $field_name = $mapping['field'] ?? '';
@@ -312,6 +352,9 @@ class DataverseClient implements DataverseClientInterface {
     return $result;
   }
 
+  /**
+   * Get valid access token.
+   */
   protected function getValidAccessToken(array $config): string {
     $access_token = $this->azureAuth->getAccessToken($config);
     if (!$access_token) {
@@ -320,23 +363,57 @@ class DataverseClient implements DataverseClientInterface {
     return $access_token;
   }
 
+  /**
+   * Execute metadata request for connection testing.
+   */
+  protected function executeMetadataRequest(array $config, string $access_token): ResponseInterface {
+    $client = $this->createHttpClient($config);
+    return $client->get('$metadata', [
+      'headers' => $this->buildHeaders($access_token, ['Accept' => 'application/xml']),
+      'timeout' => 10,
+    ]);
+  }
+
+  /**
+   * Execute entity creation request.
+   */
+  protected function executeEntityCreationRequest(array $config, string $entity_name, array $data, string $access_token): ResponseInterface {
+    return $this->createHttpClient($config)->post($entity_name, [
+      'headers' => $this->buildHeaders($access_token, ['Content-Type' => 'application/json']),
+      'json' => $data,
+      'timeout' => $config['timeout'] ?? self::DEFAULT_TIMEOUT,
+    ]);
+  }
+
+  /**
+   * Execute general request.
+   */
   protected function executeRequest(array $config, string $endpoint, string $access_token): ResponseInterface {
     return $this->createHttpClient($config)->get($endpoint, [
       'headers' => $this->buildHeaders($access_token),
     ]);
   }
 
+  /**
+   * Check if response is successful.
+   */
   protected function isSuccessResponse(ResponseInterface $response): bool {
     $status_code = $response->getStatusCode();
     return $status_code >= self::SUCCESS_STATUS_MIN && $status_code <= self::SUCCESS_STATUS_MAX;
   }
 
+  /**
+   * Validate response status.
+   */
   protected function validateResponseStatus(ResponseInterface $response, string $error_context): void {
     if (!$this->isSuccessResponse($response)) {
       throw DataverseException::fromHttpResponse($response, $error_context);
     }
   }
 
+  /**
+   * Create entities query.
+   */
   protected function createEntitiesQuery(): ODataQueryBuilder {
     return (new ODataQueryBuilder('EntityDefinitions'))
       ->select(['LogicalName', 'DisplayName', 'SchemaName', 'EntitySetName', 'Description'])
@@ -345,6 +422,9 @@ class DataverseClient implements DataverseClientInterface {
       ->orderBy('DisplayName.UserLocalizedLabel.Label');
   }
 
+  /**
+   * Create entity fields query.
+   */
   protected function createEntityFieldsQuery(string $entity_name): ODataQueryBuilder {
     return (new ODataQueryBuilder('EntityDefinitions'))
       ->filter('LogicalName', 'eq', $entity_name)
@@ -352,6 +432,9 @@ class DataverseClient implements DataverseClientInterface {
       ->select(['LogicalName', 'Attributes']);
   }
 
+  /**
+   * Parse entities response.
+   */
   protected function parseEntitiesResponse(ResponseInterface $response): array {
     $this->validateResponseStatus($response, 'Failed to retrieve entities');
     $data = $this->parseJsonResponse($response);
@@ -366,6 +449,9 @@ class DataverseClient implements DataverseClientInterface {
     return $entities;
   }
 
+  /**
+   * Build entity data structure.
+   */
   protected function buildEntityData(array $entity): array {
     return [
       'logical_name' => $entity['LogicalName'],
@@ -376,6 +462,9 @@ class DataverseClient implements DataverseClientInterface {
     ];
   }
 
+  /**
+   * Parse fields response.
+   */
   protected function parseFieldsResponse(ResponseInterface $response): array {
     $this->validateResponseStatus($response, 'Failed to retrieve entity fields');
     $data = $this->parseJsonResponse($response);
@@ -393,6 +482,9 @@ class DataverseClient implements DataverseClientInterface {
     return $fields;
   }
 
+  /**
+   * Build field data structure.
+   */
   protected function buildFieldData(array $attribute): array {
     return [
       'logical_name' => $attribute['LogicalName'],
@@ -406,6 +498,9 @@ class DataverseClient implements DataverseClientInterface {
     ];
   }
 
+  /**
+   * Parse JSON response.
+   */
   protected function parseJsonResponse(ResponseInterface $response): array {
     $content = $response->getBody()->getContents();
     $data = json_decode($content, true);
@@ -417,6 +512,9 @@ class DataverseClient implements DataverseClientInterface {
     return $data;
   }
 
+  /**
+   * Check if field attribute is valid.
+   */
   protected function isValidFieldAttribute(array $attribute): bool {
     $invalid_types = ['Virtual', 'EntityName', 'PartyList'];
     
@@ -425,6 +523,9 @@ class DataverseClient implements DataverseClientInterface {
            !in_array($attribute['AttributeType'], $invalid_types);
   }
 
+  /**
+   * Parse entity creation response.
+   */
   protected function parseEntityCreationResponse(ResponseInterface $response): array {
     $location = $response->getHeader('OData-EntityId')[0] ?? '';
     $entity_id = null;
@@ -440,6 +541,9 @@ class DataverseClient implements DataverseClientInterface {
     ];
   }
 
+  /**
+   * Check rate limit.
+   */
   protected function checkRateLimit(): void {
     $config = $this->configFactory->get('dataverse_webform.settings');
     if (!$config->get('rate_limit_enabled')) {
@@ -461,6 +565,9 @@ class DataverseClient implements DataverseClientInterface {
     }
   }
 
+  /**
+   * Record API call for rate limiting.
+   */
   protected function recordApiCall(): void {
     $config = $this->configFactory->get('dataverse_webform.settings');
     if (!$config->get('rate_limit_enabled')) {
@@ -477,6 +584,9 @@ class DataverseClient implements DataverseClientInterface {
     $this->state->set($rate_limit_key, $requests);
   }
 
+  /**
+   * Create HTTP client.
+   */
   protected function createHttpClient(array $config): \GuzzleHttp\ClientInterface {
     return $this->httpClientFactory->fromOptions([
       'base_uri' => rtrim($config['dataverse_url'], '/') . '/api/data/' . self::API_VERSION . '/',
@@ -485,6 +595,9 @@ class DataverseClient implements DataverseClientInterface {
     ]);
   }
 
+  /**
+   * Build HTTP headers.
+   */
   protected function buildHeaders(string $access_token, array $additional_headers = []): array {
     return array_merge([
       'Authorization' => 'Bearer ' . $access_token,

@@ -26,6 +26,9 @@ class ConfigurationManager {
     $this->validator = $validator;
   }
 
+  /**
+   * Get Azure credential keys.
+   */
   public function getAzureCredentialKeys(): array {
     $key_options = ['' => t('- Select a key -')];
     $keys = $this->keyRepository->getKeys();
@@ -37,6 +40,9 @@ class ConfigurationManager {
     return $key_options;
   }
 
+  /**
+   * Get key value by ID.
+   */
   public function getKeyValue(string $key_id): ?string {
     if (empty($key_id) || !$this->validateKeyAccess($key_id)) {
       return null;
@@ -59,6 +65,9 @@ class ConfigurationManager {
     }
   }
 
+  /**
+   * Validate required keys.
+   */
   public function validateRequiredKeys(array $config): array {
     $results = [
       'client_id_key' => ['exists' => false, 'has_value' => false],
@@ -71,6 +80,9 @@ class ConfigurationManager {
     return $results;
   }
 
+  /**
+   * Get default configuration.
+   */
   public function getDefaultConfiguration(): array {
     return [
       'enabled' => false,
@@ -87,10 +99,16 @@ class ConfigurationManager {
     ];
   }
 
+  /**
+   * Merge configuration with defaults.
+   */
   public function mergeWithDefaults(array $user_config): array {
     return array_merge($this->getDefaultConfiguration(), $user_config);
   }
 
+  /**
+   * Convert legacy configuration.
+   */
   public function convertLegacyConfiguration(array $old_config): array {
     $new_config = $this->getDefaultConfiguration();
 
@@ -103,6 +121,9 @@ class ConfigurationManager {
     return $new_config;
   }
 
+  /**
+   * Get entities from field mappings.
+   */
   public function getEntitiesFromMappings(array $field_mappings): array {
     $entities = [];
     foreach ($field_mappings as $mapping) {
@@ -113,6 +134,9 @@ class ConfigurationManager {
     return array_unique($entities);
   }
 
+  /**
+   * Group mappings by entity.
+   */
   public function groupMappingsByEntity(array $field_mappings): array {
     $grouped = [];
     foreach ($field_mappings as $mapping) {
@@ -124,6 +148,9 @@ class ConfigurationManager {
     return $grouped;
   }
 
+  /**
+   * Validate configuration.
+   */
   public function validateConfiguration(array $config): array {
     $results = [
       'valid' => true,
@@ -148,6 +175,9 @@ class ConfigurationManager {
     return $results;
   }
 
+  /**
+   * Extract credentials from configuration.
+   */
   public function extractCredentialsFromConfig(array $config): array {
     $client_id = $this->getKeyValue($config['azure_client_id_key'] ?? '');
     $client_secret = $this->getKeyValue($config['azure_client_secret_key'] ?? '');
@@ -159,10 +189,13 @@ class ConfigurationManager {
     ];
   }
 
+  /**
+   * Sanitize configuration for logging.
+   */
   public function sanitizeConfigForLogging(array $config): array {
     $safe_config = $config;
     
-    // Remove sensitive keys but keep the key names for debugging
+    // Remove sensitive keys but keep the key names for debugging.
     $sensitive_fields = ['azure_client_id_key', 'azure_client_secret_key'];
     foreach ($sensitive_fields as $field) {
       if (isset($safe_config[$field])) {
@@ -173,11 +206,17 @@ class ConfigurationManager {
     return $safe_config;
   }
 
+  /**
+   * Check if configuration is valid.
+   */
   public function isValidConfiguration(array $config): bool {
     $validation_result = $this->validateConfiguration($config);
     return $validation_result['valid'] && empty($validation_result['errors']);
   }
 
+  /**
+   * Get configuration summary.
+   */
   public function getConfigurationSummary(array $config): array {
     $entities = $this->getEntitiesFromMappings($config['field_mappings'] ?? []);
     
@@ -193,6 +232,9 @@ class ConfigurationManager {
     ];
   }
 
+  /**
+   * Copy basic settings from old configuration.
+   */
   protected function copyBasicSettings(array $old_config, array &$new_config): void {
     $basic_settings = [
       'enabled', 'azure_tenant_id', 'azure_client_id_key', 
@@ -206,10 +248,16 @@ class ConfigurationManager {
     }
   }
 
+  /**
+   * Check if old configuration has legacy field mappings.
+   */
   protected function hasLegacyFieldMappings(array $old_config): bool {
     return !empty($old_config['field_mapping']) && !empty($old_config['target_entity']);
   }
 
+  /**
+   * Convert legacy field mappings to new format.
+   */
   protected function convertLegacyFieldMappings(array $old_config, array &$new_config): void {
     $target_entity = $old_config['target_entity'];
     $field_mappings = [];
@@ -231,6 +279,9 @@ class ConfigurationManager {
     $new_config['submission_order'] = [$target_entity];
   }
 
+  /**
+   * Validate individual key.
+   */
   protected function validateKey(string $key_id, array &$result): void {
     if (!empty($key_id)) {
       $key = $this->keyRepository->getKey($key_id);
@@ -243,6 +294,9 @@ class ConfigurationManager {
     }
   }
 
+  /**
+   * Validate keys in configuration.
+   */
   protected function validateKeys(array $config, array &$results): void {
     $key_results = $this->validateRequiredKeys($config);
     $results['key_validation'] = $key_results;
@@ -258,6 +312,9 @@ class ConfigurationManager {
     }
   }
 
+  /**
+   * Validate key access permissions.
+   */
   protected function validateKeyAccess(string $key_id): bool {
     if (empty($key_id)) {
       return false;
@@ -271,23 +328,35 @@ class ConfigurationManager {
     return $this->keyRepository->getKey($key_id) !== null;
   }
 
+  /**
+   * Add configuration warnings.
+   */
   protected function addConfigurationWarnings(array $config, array &$results): void {
     if (!empty($config['field_mappings'])) {
-      $entities = $this->getEntitiesFromMappings($config['field_mappings']);
-      
-      if (empty($config['submission_order'])) {
-        $results['warnings'][] = 'No submission order specified. Entities will be processed in random order.';
-      } elseif (count($entities) !== count($config['submission_order'])) {
-        $results['warnings'][] = 'Submission order does not include all entities from field mappings.';
-      }
-      
-      // Check for potential circular dependencies
-      if (count($entities) > 1) {
-        $this->checkForCircularDependencies($config['field_mappings'], $results);
-      }
+      $this->checkEntityWarnings($config, $results);
+      $this->checkCircularDependencies($config['field_mappings'], $results);
     }
 
-    // Add warnings for potentially problematic settings
+    $this->checkPerformanceWarnings($config, $results);
+  }
+
+  /**
+   * Check entity-related warnings.
+   */
+  protected function checkEntityWarnings(array $config, array &$results): void {
+    $entities = $this->getEntitiesFromMappings($config['field_mappings']);
+    
+    if (empty($config['submission_order'])) {
+      $results['warnings'][] = 'No submission order specified. Entities will be processed in random order.';
+    } elseif (count($entities) !== count($config['submission_order'])) {
+      $results['warnings'][] = 'Submission order does not include all entities from field mappings.';
+    }
+  }
+
+  /**
+   * Check for performance-related warnings.
+   */
+  protected function checkPerformanceWarnings(array $config, array &$results): void {
     $warning_checks = [
       'timeout' => [120, 'Request timeout is set very high (%ds). This may cause performance issues.'],
       'batch_size' => [50, 'Batch size is set very high (%d). This may cause memory or timeout issues.'],
@@ -300,7 +369,10 @@ class ConfigurationManager {
     }
   }
 
-  protected function checkForCircularDependencies(array $field_mappings, array &$results): void {
+  /**
+   * Check for circular dependencies in mappings.
+   */
+  protected function checkCircularDependencies(array $field_mappings, array &$results): void {
     $relationships = [];
     
     foreach ($field_mappings as $mapping) {
@@ -309,7 +381,7 @@ class ConfigurationManager {
       }
     }
     
-    // Simple circular dependency check - could be enhanced for more complex scenarios
+    // Simple circular dependency check.
     foreach ($relationships as $entity => $deps) {
       foreach ($deps as $dep) {
         if (isset($relationships[$dep]) && in_array($entity, $relationships[$dep])) {

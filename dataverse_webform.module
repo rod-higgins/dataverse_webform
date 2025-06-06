@@ -13,6 +13,7 @@ use Drupal\webform\WebformSubmissionInterface;
  */
 function dataverse_webform_webform_submission_insert(WebformSubmissionInterface $webform_submission): void {
   try {
+    /** @var \Drupal\dataverse_webform\Service\WebformSubmissionHandler $handler */
     $handler = \Drupal::service('dataverse_webform.submission_handler');
     $handler->processSubmission($webform_submission);
   } catch (\Exception $e) {
@@ -32,6 +33,7 @@ function dataverse_webform_webform_submission_insert(WebformSubmissionInterface 
  */
 function dataverse_webform_form_webform_admin_form_alter(array &$form, FormStateInterface $form_state, string $form_id): void {
   try {
+    /** @var \Drupal\dataverse_webform\Form\WebformSettingsFormBuilder $form_builder */
     $form_builder = \Drupal::service('dataverse_webform.form_builder');
     $form_builder->buildWebformSettingsForm($form, $form_state);
   } catch (\Exception $e) {
@@ -205,6 +207,7 @@ function _dataverse_webform_check_configuration_status(): array {
  * Get webforms configured with Dataverse integration.
  */
 function _dataverse_webform_get_configured_webforms(): array {
+  /** @var \Drupal\webform\WebformInterface[] $webforms */
   $webforms = \Drupal::entityTypeManager()->getStorage('webform')->loadMultiple();
   $configured_webforms = [];
   
@@ -223,6 +226,7 @@ function _dataverse_webform_get_configured_webforms(): array {
  */
 function _dataverse_webform_check_configuration_issues(): array {
   $issues = [];
+  /** @var \Drupal\webform\WebformInterface[] $webforms */
   $webforms = \Drupal::entityTypeManager()->getStorage('webform')->loadMultiple();
   
   foreach ($webforms as $webform) {
@@ -244,7 +248,7 @@ function _dataverse_webform_validate_webform_config(\Drupal\webform\WebformInter
   $issues = [];
   $webform_id = $webform->id();
   
-  // Check required fields
+  // Check required fields.
   $required_fields = ['azure_tenant_id', 'azure_client_id_key', 'azure_client_secret_key', 'dataverse_url'];
   foreach ($required_fields as $field) {
     if (empty($config[$field])) {
@@ -252,17 +256,23 @@ function _dataverse_webform_validate_webform_config(\Drupal\webform\WebformInter
     }
   }
   
-  // Check field mappings
+  // Check field mappings.
   if (empty($config['field_mappings'])) {
     $issues[] = "Webform {$webform_id}: no field mappings configured";
   }
   
-  // Validate keys
+  // Validate keys.
   try {
+    /** @var \Drupal\key\KeyRepositoryInterface $key_repository */
     $key_repository = \Drupal::service('key.repository');
     foreach (['azure_client_id_key', 'azure_client_secret_key'] as $key_field) {
-      if (!empty($config[$key_field]) && !$key_repository->getKey($config[$key_field])) {
-        $issues[] = "Webform {$webform_id}: {$key_field} not found";
+      if (!empty($config[$key_field])) {
+        $key = $key_repository->getKey($config[$key_field]);
+        if (!$key) {
+          $issues[] = "Webform {$webform_id}: {$key_field} not found";
+        } elseif (empty($key->getKeyValue())) {
+          $issues[] = "Webform {$webform_id}: {$key_field} has no value";
+        }
       }
     }
   } catch (\Exception $e) {
@@ -276,7 +286,9 @@ function _dataverse_webform_validate_webform_config(\Drupal\webform\WebformInter
  * Process queue items during cron.
  */
 function _dataverse_webform_process_queue_items(): void {
+  /** @var \Drupal\Core\Queue\QueueWorkerManagerInterface $queue_worker_manager */
   $queue_worker_manager = \Drupal::service('plugin.manager.queue_worker');
+  /** @var \Drupal\Core\Queue\QueueFactory $queue_factory */
   $queue_factory = \Drupal::service('queue');
   
   $queue_name = 'dataverse_webform_submissions';
@@ -284,7 +296,7 @@ function _dataverse_webform_process_queue_items(): void {
   $queue_worker = $queue_worker_manager->createInstance($queue_name);
   
   $processed = 0;
-  $max_items = 50; // Process up to 50 items per cron run
+  $max_items = 50;
   
   while ($processed < $max_items && ($item = $queue->claimItem())) {
     try {
@@ -312,13 +324,16 @@ function _dataverse_webform_process_queue_items(): void {
  * Cleanup old data during cron.
  */
 function _dataverse_webform_cleanup_old_data(): void {
+  /** @var \Drupal\Core\State\StateInterface $state */
   $state = \Drupal::state();
   $current_time = time();
   $cutoff_time = $current_time - (7 * 24 * 60 * 60); // 7 days ago
   
   try {
-    // Clean up old retry records
+    /** @var \Drupal\Core\Database\Connection $connection */
     $connection = \Drupal::database();
+    
+    // Clean up old retry records.
     $old_retry_keys = $connection->select('key_value', 'kv')
       ->fields('kv', ['name'])
       ->condition('collection', 'state')
@@ -331,7 +346,7 @@ function _dataverse_webform_cleanup_old_data(): void {
       $state->delete($key);
     }
     
-    // Clean up old rate limit records
+    // Clean up old rate limit records.
     $rate_limit_keys = $connection->select('key_value', 'kv')
       ->fields('kv', ['name'])
       ->condition('collection', 'state')

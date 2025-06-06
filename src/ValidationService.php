@@ -38,6 +38,9 @@ class ValidationService {
     $this->loggerFactory = $logger_factory;
   }
 
+  /**
+   * Validate complete configuration.
+   */
   public function validateConfig(array $config): void {
     if (empty($config['enabled'])) {
       throw DataverseException::configurationError('Dataverse integration is not enabled');
@@ -56,6 +59,9 @@ class ValidationService {
     }
   }
 
+  /**
+   * Validate entity name format.
+   */
   public function validateEntityName(string $entity_name): void {
     if (empty($entity_name)) {
       throw DataverseException::validationError('Entity name cannot be empty');
@@ -66,6 +72,9 @@ class ValidationService {
     }
   }
 
+  /**
+   * Validate field name format.
+   */
   public function validateFieldName(string $field_name): void {
     if (empty($field_name)) {
       throw DataverseException::validationError('Field name cannot be empty');
@@ -80,6 +89,9 @@ class ValidationService {
     }
   }
 
+  /**
+   * Validate entity data structure.
+   */
   public function validateEntityData(array $data): void {
     if (empty($data)) {
       throw DataverseException::validationError('Entity data cannot be empty');
@@ -91,10 +103,16 @@ class ValidationService {
     }
   }
 
+  /**
+   * Check if string is valid GUID.
+   */
   public function isValidGuid(string $guid): bool {
     return (bool) preg_match(self::GUID_PATTERN, $guid);
   }
 
+  /**
+   * Check if URL is valid.
+   */
   public function isValidUrl(string $url, bool $require_https = true): bool {
     if (!filter_var($url, FILTER_VALIDATE_URL)) {
       return false;
@@ -103,6 +121,9 @@ class ValidationService {
     return !$require_https || str_starts_with($url, 'https://');
   }
 
+  /**
+   * Validate batch of configurations.
+   */
   public function validateBatchConfigurationSet(array $configs): array {
     $errors = [];
     
@@ -117,6 +138,9 @@ class ValidationService {
     return $errors;
   }
 
+  /**
+   * Validate required configuration fields.
+   */
   protected function validateRequiredFields(array $config): void {
     $required_fields = ['azure_tenant_id', 'azure_client_id_key', 'azure_client_secret_key', 'dataverse_url'];
 
@@ -127,23 +151,35 @@ class ValidationService {
     }
   }
 
+  /**
+   * Validate field formats in configuration.
+   */
   protected function validateFieldFormats(array $config): void {
     $this->validateAzureTenantId($config['azure_tenant_id']);
     $this->validateDataverseUrl($config['dataverse_url']);
   }
 
+  /**
+   * Validate Azure tenant ID format.
+   */
   protected function validateAzureTenantId(string $tenant_id): void {
     if (!$this->isValidGuid($tenant_id)) {
       throw DataverseException::validationError('Azure Tenant ID must be a valid GUID format');
     }
   }
 
+  /**
+   * Validate Dataverse URL format.
+   */
   protected function validateDataverseUrl(string $url): void {
     if (!$this->isValidUrl($url, true)) {
       throw DataverseException::validationError('Dataverse URL must be a valid HTTPS URL');
     }
   }
 
+  /**
+   * Validate optional settings.
+   */
   protected function validateOptionalSettings(array $config): void {
     foreach (self::NUMERIC_SETTINGS as $field => [$min, $max]) {
       if (isset($config[$field])) {
@@ -152,12 +188,18 @@ class ValidationService {
     }
   }
 
+  /**
+   * Validate numeric range.
+   */
   protected function validateNumericRange(string $field, int $value, int $min, int $max): void {
     if ($value < $min || $value > $max) {
       throw DataverseException::validationError("{$field} must be between {$min} and {$max}, got {$value}");
     }
   }
 
+  /**
+   * Validate field mappings array.
+   */
   protected function validateFieldMappings(array $field_mappings): void {
     if (empty($field_mappings)) {
       return;
@@ -173,6 +215,9 @@ class ValidationService {
     $this->checkDuplicateMappings($field_mappings);
   }
 
+  /**
+   * Validate single field mapping.
+   */
   protected function validateSingleMapping(int $index, $mapping): void {
     if (!is_array($mapping)) {
       throw DataverseException::validationError("Invalid mapping configuration at index {$index}");
@@ -187,6 +232,9 @@ class ValidationService {
     }
   }
 
+  /**
+   * Validate mapping structure.
+   */
   protected function validateMappingStructure(int $index, array $mapping): void {
     $required_fields = ['webform_field', 'entity', 'field'];
     $missing_fields = array_filter($required_fields, fn($field) => empty($mapping[$field]));
@@ -196,6 +244,9 @@ class ValidationService {
     }
   }
 
+  /**
+   * Check for duplicate mappings.
+   */
   protected function checkDuplicateMappings(array $field_mappings): void {
     $seen_mappings = [];
     
@@ -213,6 +264,9 @@ class ValidationService {
     }
   }
 
+  /**
+   * Validate submission order.
+   */
   protected function validateSubmissionOrder(array $submission_order, array $field_mappings): void {
     if (empty($submission_order)) {
       return;
@@ -231,6 +285,9 @@ class ValidationService {
     $this->checkMissingEntitiesInOrder($entities_in_mappings, $submission_order);
   }
 
+  /**
+   * Extract entities from field mappings.
+   */
   protected function extractEntitiesFromMappings(array $field_mappings): array {
     $entities = [];
     foreach ($field_mappings as $mapping) {
@@ -241,6 +298,9 @@ class ValidationService {
     return array_unique($entities);
   }
 
+  /**
+   * Check for missing entities in submission order.
+   */
   protected function checkMissingEntitiesInOrder(array $entities_in_mappings, array $submission_order): void {
     $missing_entities = array_diff($entities_in_mappings, $submission_order);
     if (!empty($missing_entities)) {
@@ -251,6 +311,9 @@ class ValidationService {
     }
   }
 
+  /**
+   * Validate field value.
+   */
   protected function validateFieldValue(string $field_name, $value): void {
     if ($value === null) {
       return;
@@ -265,6 +328,9 @@ class ValidationService {
     }
   }
 
+  /**
+   * Validate string value.
+   */
   protected function validateStringValue(string $field_name, string $value): void {
     if (strlen($value) > self::MAX_STRING_LENGTH) {
       throw DataverseException::validationError("Value for field '{$field_name}' exceeds maximum length of " . self::MAX_STRING_LENGTH . " characters");
@@ -275,6 +341,9 @@ class ValidationService {
     }
   }
 
+  /**
+   * Validate transform type.
+   */
   protected function validateTransform(string $transform): void {
     if (!in_array($transform, self::ALLOWED_TRANSFORMS)) {
       throw DataverseException::validationError("Invalid transform type '{$transform}'. Allowed values: " . implode(', ', self::ALLOWED_TRANSFORMS));

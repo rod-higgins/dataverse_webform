@@ -43,6 +43,9 @@ class AzureAdAuthService {
     $this->lock = $lock;
   }
 
+  /**
+   * Get access token for Dataverse API.
+   */
   public function getAccessToken(array $config): ?string {
     $this->validateAuthConfig($config);
 
@@ -54,6 +57,9 @@ class AzureAdAuthService {
     return $this->refreshTokenSafely($config);
   }
 
+  /**
+   * Invalidate cached token.
+   */
   public function invalidateToken(array $config): void {
     $cache_key = $this->buildCacheKey($config);
     $lock_key = $cache_key . ':lock';
@@ -70,10 +76,16 @@ class AzureAdAuthService {
     }
   }
 
+  /**
+   * Check if valid token exists.
+   */
   public function hasValidToken(array $config): bool {
     return $this->getCachedToken($config) !== null;
   }
 
+  /**
+   * Get cached token safely with locking.
+   */
   protected function getCachedTokenSafely(array $config): ?string {
     $cache_key = $this->buildCacheKey($config);
     $lock_key = $cache_key . ':lock';
@@ -89,6 +101,9 @@ class AzureAdAuthService {
     return $this->getCachedToken($config);
   }
 
+  /**
+   * Get cached token from state.
+   */
   protected function getCachedToken(array $config): ?string {
     $cache_key = $this->buildCacheKey($config);
     $cached_data = $this->state->get($cache_key);
@@ -104,6 +119,9 @@ class AzureAdAuthService {
     return null;
   }
 
+  /**
+   * Refresh token safely with locking.
+   */
   protected function refreshTokenSafely(array $config): ?string {
     $cache_key = $this->buildCacheKey($config);
     $lock_key = $cache_key . ':refresh';
@@ -119,8 +137,11 @@ class AzureAdAuthService {
     return $this->waitAndRetryToken($config);
   }
 
+  /**
+   * Handle token refresh with double-check.
+   */
   protected function handleTokenRefresh(array $config): ?string {
-    // Check again in case another process refreshed it
+    // Check again in case another process refreshed it.
     $cached_token = $this->getCachedToken($config);
     if ($cached_token) {
       return $cached_token;
@@ -129,6 +150,9 @@ class AzureAdAuthService {
     return $this->refreshAccessToken($config);
   }
 
+  /**
+   * Wait and retry token retrieval.
+   */
   protected function waitAndRetryToken(array $config): ?string {
     usleep(self::LOCK_WAIT_TIME);
     
@@ -137,10 +161,13 @@ class AzureAdAuthService {
       return $cached_token;
     }
     
-    // Fallback to direct refresh
+    // Fallback to direct refresh.
     return $this->refreshAccessToken($config);
   }
 
+  /**
+   * Refresh access token from Azure AD.
+   */
   protected function refreshAccessToken(array $config): ?string {
     $credentials = $this->getAzureCredentials($config);
     
@@ -161,6 +188,9 @@ class AzureAdAuthService {
     return null;
   }
 
+  /**
+   * Process successful token response.
+   */
   protected function processTokenResponse(array $config, array $body): string {
     $token = $body['access_token'];
     $expires_in = min((int) ($body['expires_in'] ?? 3600), self::MAX_TOKEN_LIFETIME);
@@ -171,6 +201,9 @@ class AzureAdAuthService {
     return $token;
   }
 
+  /**
+   * Make token request to Azure AD.
+   */
   protected function makeTokenRequest(array $config, array $credentials): ResponseInterface {
     $client = $this->httpClientFactory->fromOptions([
       'timeout' => self::DEFAULT_REQUEST_TIMEOUT,
@@ -190,6 +223,9 @@ class AzureAdAuthService {
     ]);
   }
 
+  /**
+   * Handle token error response.
+   */
   protected function handleTokenError(array $body): void {
     $error = $body['error'] ?? 'unknown_error';
     $error_description = $body['error_description'] ?? 'No error description provided';
@@ -197,12 +233,18 @@ class AzureAdAuthService {
     throw DataverseException::authenticationError("{$error} - {$error_description}");
   }
 
+  /**
+   * Handle request exception.
+   */
   protected function handleRequestException(RequestException $e): void {
     $error_message = 'Azure AD authentication request failed: ' . $e->getMessage();
     $this->loggerFactory->get('dataverse_webform')->error($error_message);
     throw DataverseException::networkError($error_message, ['previous' => $e]);
   }
 
+  /**
+   * Log successful token refresh.
+   */
   protected function logSuccessfulTokenRefresh(int $expires_in): void {
     $this->loggerFactory->get('dataverse_webform')->info(
       'Successfully obtained Azure AD access token, expires in @expires seconds',
@@ -210,6 +252,9 @@ class AzureAdAuthService {
     );
   }
 
+  /**
+   * Get Azure credentials from configuration.
+   */
   protected function getAzureCredentials(array $config): array {
     $client_id = $this->getKeyValue($config['azure_client_id_key'] ?? '');
     $client_secret = $this->getKeyValue($config['azure_client_secret_key'] ?? '');
@@ -226,6 +271,9 @@ class AzureAdAuthService {
     ];
   }
 
+  /**
+   * Get key value from key repository.
+   */
   protected function getKeyValue(string $key_id): ?string {
     if (empty($key_id)) {
       return null;
@@ -248,6 +296,9 @@ class AzureAdAuthService {
     }
   }
 
+  /**
+   * Parse token response from Azure AD.
+   */
   protected function parseTokenResponse(ResponseInterface $response): array {
     $content = $response->getBody()->getContents();
     $body = json_decode($content, true);
@@ -259,6 +310,9 @@ class AzureAdAuthService {
     return $body;
   }
 
+  /**
+   * Cache token in state storage.
+   */
   protected function cacheToken(array $config, string $token, int $expires_in): void {
     $cache_key = $this->buildCacheKey($config);
     
@@ -272,6 +326,9 @@ class AzureAdAuthService {
     $this->state->set($cache_key, $cache_data);
   }
 
+  /**
+   * Build cache key for token storage.
+   */
   protected function buildCacheKey(array $config): string {
     $cache_config = [
       'azure_tenant_id' => $config['azure_tenant_id'] ?? '',
@@ -282,12 +339,18 @@ class AzureAdAuthService {
     return 'dataverse_webform.token.' . hash('sha256', serialize($cache_config));
   }
 
+  /**
+   * Check if cached data is valid.
+   */
   protected function isValidCacheData($cached_data): bool {
     return is_array($cached_data) && 
            !empty($cached_data['token']) && 
            !empty($cached_data['expires']);
   }
 
+  /**
+   * Validate authentication configuration.
+   */
   protected function validateAuthConfig(array $config): void {
     $required_fields = ['azure_tenant_id', 'azure_client_id_key', 'azure_client_secret_key', 'dataverse_url'];
 
@@ -297,12 +360,12 @@ class AzureAdAuthService {
       }
     }
 
-    // Validate tenant ID format
+    // Validate tenant ID format.
     if (!preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $config['azure_tenant_id'])) {
       throw DataverseException::validationError('Azure Tenant ID must be a valid GUID format');
     }
 
-    // Validate Dataverse URL
+    // Validate Dataverse URL.
     if (!filter_var($config['dataverse_url'], FILTER_VALIDATE_URL) || !str_starts_with($config['dataverse_url'], 'https://')) {
       throw DataverseException::validationError('Dataverse URL must be a valid HTTPS URL');
     }

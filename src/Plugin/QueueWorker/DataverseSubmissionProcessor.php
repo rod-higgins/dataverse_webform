@@ -50,6 +50,9 @@ class DataverseSubmissionProcessor extends QueueWorkerBase implements ContainerF
     );
   }
 
+  /**
+   * Process queue item.
+   */
   public function processItem($data) {
     $this->validateQueueItemData($data);
     
@@ -68,6 +71,9 @@ class DataverseSubmissionProcessor extends QueueWorkerBase implements ContainerF
     }
   }
 
+  /**
+   * Validate queue item data structure.
+   */
   protected function validateQueueItemData(array $data): void {
     $required_fields = ['submission_id', 'webform_id', 'config'];
     
@@ -81,17 +87,20 @@ class DataverseSubmissionProcessor extends QueueWorkerBase implements ContainerF
       throw new \InvalidArgumentException('Config must be an array');
     }
 
-    // Validate submission ID format
+    // Validate submission ID format.
     if (!is_string($data['submission_id']) || empty($data['submission_id'])) {
       throw new \InvalidArgumentException('Submission ID must be a non-empty string');
     }
 
-    // Validate webform ID format
+    // Validate webform ID format.
     if (!is_string($data['webform_id']) || empty($data['webform_id'])) {
       throw new \InvalidArgumentException('Webform ID must be a non-empty string');
     }
   }
 
+  /**
+   * Handle failed submission processing.
+   */
   protected function handleFailedSubmission(array $data): void {
     $retry_count = $data['retry_count'] ?? 0;
     
@@ -102,6 +111,9 @@ class DataverseSubmissionProcessor extends QueueWorkerBase implements ContainerF
     }
   }
 
+  /**
+   * Handle Dataverse-specific exceptions.
+   */
   protected function handleDataverseException(array $data, DataverseException $e): void {
     $submission_id = $data['submission_id'] ?? 'unknown';
     
@@ -114,7 +126,7 @@ class DataverseSubmissionProcessor extends QueueWorkerBase implements ContainerF
       ]
     );
 
-    // Determine if we should retry based on the error type
+    // Determine if we should retry based on the error type.
     if ($e->isRetryable()) {
       $this->handleFailedSubmission($data);
     } else {
@@ -130,6 +142,9 @@ class DataverseSubmissionProcessor extends QueueWorkerBase implements ContainerF
     }
   }
 
+  /**
+   * Handle unexpected exceptions.
+   */
   protected function handleUnexpectedException(array $data, \Exception $e): void {
     $submission_id = $data['submission_id'] ?? 'unknown';
     
@@ -143,10 +158,13 @@ class DataverseSubmissionProcessor extends QueueWorkerBase implements ContainerF
       ]
     );
     
-    // For unexpected exceptions, we'll retry up to the limit
+    // For unexpected exceptions, we'll retry up to the limit.
     $this->handleFailedSubmission($data);
   }
 
+  /**
+   * Requeue item with exponential backoff delay.
+   */
   protected function requeueWithDelay(array $data, int $current_retry_count): void {
     $new_retry_count = $current_retry_count + 1;
     $delay = min(self::MAX_RETRY_DELAY, pow(2, $new_retry_count) * self::RETRY_DELAY_BASE); // Exponential backoff with cap
@@ -155,7 +173,7 @@ class DataverseSubmissionProcessor extends QueueWorkerBase implements ContainerF
     $data['retry_scheduled'] = time() + $delay;
     $data['last_retry_at'] = time();
     
-    // Add the item back to the queue
+    // Add the item back to the queue.
     $queue = \Drupal::queue('dataverse_webform_submissions');
     $queue->createItem($data);
     
@@ -169,6 +187,9 @@ class DataverseSubmissionProcessor extends QueueWorkerBase implements ContainerF
     );
   }
 
+  /**
+   * Log successful processing.
+   */
   protected function logSuccessfulProcessing(array $data): void {
     $processing_time = isset($data['created']) ? time() - $data['created'] : 0;
     
@@ -181,6 +202,9 @@ class DataverseSubmissionProcessor extends QueueWorkerBase implements ContainerF
     );
   }
 
+  /**
+   * Log permanent failure after all retries exhausted.
+   */
   protected function logPermanentFailure(array $data): void {
     $submission_id = $data['submission_id'] ?? 'unknown';
     $retry_count = $data['retry_count'] ?? 0;
@@ -195,13 +219,15 @@ class DataverseSubmissionProcessor extends QueueWorkerBase implements ContainerF
       ]
     );
     
-    // Track the permanent failure
+    // Track the permanent failure.
     $this->trackPermanentFailure($data);
   }
 
+  /**
+   * Track permanently failed submissions for reporting.
+   */
   protected function trackPermanentFailure(array $data, ?\Exception $last_exception = null): void {
-    // Store information about permanently failed submissions
-    // This could be used for reporting or manual intervention
+    // Store information about permanently failed submissions.
     $state = \Drupal::state();
     $failed_submissions = $state->get('dataverse_webform.failed_submissions', []);
     
@@ -218,7 +244,7 @@ class DataverseSubmissionProcessor extends QueueWorkerBase implements ContainerF
 
     $failed_submissions[] = $failure_record;
     
-    // Keep only the last 100 failed submissions to prevent unbounded growth
+    // Keep only the last 100 failed submissions to prevent unbounded growth.
     if (count($failed_submissions) > 100) {
       $failed_submissions = array_slice($failed_submissions, -100);
     }

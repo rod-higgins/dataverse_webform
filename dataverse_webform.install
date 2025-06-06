@@ -61,7 +61,7 @@ function dataverse_webform_uninstall(): void {
       'Error during module uninstallation: @error',
       ['@error' => $e->getMessage()]
     );
-    // Don't throw exception during uninstall as it prevents module removal
+    // Don't throw exception during uninstall as it prevents module removal.
   }
 }
 
@@ -86,6 +86,7 @@ function _dataverse_webform_get_default_settings(): array {
  */
 function dataverse_webform_check_module_dependencies(): array {
   $requirements = [];
+  /** @var \Drupal\Core\Extension\ModuleHandlerInterface $module_handler */
   $module_handler = \Drupal::service('module_handler');
   
   $required_modules = [
@@ -112,26 +113,26 @@ function dataverse_webform_check_module_dependencies(): array {
 function dataverse_webform_check_php_requirements(): array {
   $requirements = [];
   
-  // Check required PHP extensions
-  $php_checks = [
-    ['curl_init', 'cURL not available', 'cURL is required for HTTP communication', REQUIREMENT_ERROR],
-    ['openssl_encrypt', 'OpenSSL extension not available', 'OpenSSL is required for secure communication', REQUIREMENT_ERROR],
-    ['json_encode', 'JSON extension not available', 'JSON extension is required for API communication', REQUIREMENT_ERROR],
-    ['hash', 'Hash extension not available', 'Hash extension is required for caching', REQUIREMENT_ERROR],
+  // Check required PHP extensions.
+  $extension_checks = [
+    'curl' => ['curl_init', 'cURL not available', 'cURL is required for HTTP communication'],
+    'openssl' => ['openssl_encrypt', 'OpenSSL extension not available', 'OpenSSL is required for secure communication'],
+    'json' => ['json_encode', 'JSON extension not available', 'JSON extension is required for API communication'],
+    'hash' => ['hash', 'Hash extension not available', 'Hash extension is required for caching'],
   ];
   
-  foreach ($php_checks as [$function, $title, $description, $severity]) {
+  foreach ($extension_checks as $ext => [$function, $title, $description]) {
     if (!function_exists($function)) {
-      $requirements['dataverse_webform_' . str_replace(['_', 'openssl_'], ['', 'openssl'], $function)] = [
+      $requirements["dataverse_webform_{$ext}"] = [
         'title' => t('Dataverse Webform Integration'),
         'value' => t($title),
         'description' => t($description),
-        'severity' => $severity,
+        'severity' => REQUIREMENT_ERROR,
       ];
     }
   }
   
-  // Check PHP version
+  // Check PHP version.
   if (version_compare(PHP_VERSION, '8.0', '<')) {
     $requirements['dataverse_webform_php'] = [
       'title' => t('Dataverse Webform Integration'),
@@ -141,7 +142,7 @@ function dataverse_webform_check_php_requirements(): array {
     ];
   }
 
-  // Check memory limit
+  // Check memory limit.
   $memory_requirement = dataverse_webform_check_memory_limit();
   if ($memory_requirement) {
     $requirements['dataverse_webform_memory'] = $memory_requirement;
@@ -156,7 +157,7 @@ function dataverse_webform_check_php_requirements(): array {
 function dataverse_webform_check_memory_limit(): ?array {
   $memory_limit = ini_get('memory_limit');
   if ($memory_limit === '-1') {
-    return null; // Unlimited memory
+    return null; // Unlimited memory.
   }
 
   $memory_bytes = dataverse_webform_parse_size($memory_limit);
@@ -217,6 +218,7 @@ function dataverse_webform_check_webform_configurations(): array {
  * Get webforms configured with Dataverse integration.
  */
 function dataverse_webform_get_configured_webforms(): array {
+  /** @var \Drupal\webform\WebformInterface[] $webforms */
   $webforms = \Drupal::entityTypeManager()->getStorage('webform')->loadMultiple();
   $configured_webforms = [];
   
@@ -242,6 +244,7 @@ function dataverse_webform_get_configured_webforms(): array {
  */
 function dataverse_webform_check_configuration_issues(): array {
   $issues = [];
+  /** @var \Drupal\webform\WebformInterface[] $webforms */
   $webforms = \Drupal::entityTypeManager()->getStorage('webform')->loadMultiple();
   
   foreach ($webforms as $webform) {
@@ -267,7 +270,7 @@ function dataverse_webform_validate_webform_config(\Drupal\webform\WebformInterf
   $issues = [];
   $webform_id = $webform->id();
   
-  // Check required fields
+  // Check required fields.
   $required_fields = ['azure_tenant_id', 'azure_client_id_key', 'azure_client_secret_key', 'dataverse_url'];
   foreach ($required_fields as $field) {
     if (empty($config[$field])) {
@@ -275,14 +278,32 @@ function dataverse_webform_validate_webform_config(\Drupal\webform\WebformInterf
     }
   }
   
-  // Check field mappings
+  // Check field mappings.
   if (empty($config['field_mappings'])) {
     $issues[] = "Webform {$webform_id}: no field mappings configured";
   }
   
-  // Validate keys
+  // Validate keys.
+  $key_issues = dataverse_webform_validate_keys($webform_id, $config);
+  $issues = array_merge($issues, $key_issues);
+  
+  // Validate URLs and format.
+  $format_issues = dataverse_webform_validate_config_formats($webform_id, $config);
+  $issues = array_merge($issues, $format_issues);
+  
+  return $issues;
+}
+
+/**
+ * Validate keys in configuration.
+ */
+function dataverse_webform_validate_keys(string $webform_id, array $config): array {
+  $issues = [];
+  
   try {
+    /** @var \Drupal\key\KeyRepositoryInterface $key_repository */
     $key_repository = \Drupal::service('key.repository');
+    
     foreach (['azure_client_id_key', 'azure_client_secret_key'] as $key_field) {
       if (!empty($config[$key_field])) {
         $key = $key_repository->getKey($config[$key_field]);
@@ -297,7 +318,15 @@ function dataverse_webform_validate_webform_config(\Drupal\webform\WebformInterf
     $issues[] = "Webform {$webform_id}: error validating keys - {$e->getMessage()}";
   }
   
-  // Validate URLs and format
+  return $issues;
+}
+
+/**
+ * Validate configuration field formats.
+ */
+function dataverse_webform_validate_config_formats(string $webform_id, array $config): array {
+  $issues = [];
+  
   $validation_checks = [
     'dataverse_url' => function($url) {
       return filter_var($url, FILTER_VALIDATE_URL) && str_starts_with($url, 'https://');
@@ -321,6 +350,7 @@ function dataverse_webform_validate_webform_config(\Drupal\webform\WebformInterf
  */
 function dataverse_webform_clean_webform_settings(): void {
   try {
+    /** @var \Drupal\webform\WebformInterface[] $webforms */
     $webforms = \Drupal::entityTypeManager()->getStorage('webform')->loadMultiple();
     $cleaned_count = 0;
     
@@ -351,14 +381,15 @@ function dataverse_webform_clean_webform_settings(): void {
  */
 function dataverse_webform_clean_cache_and_state(): void {
   try {
-    // Clear caches
+    // Clear caches.
     \Drupal::cache('default')->invalidateTags(['dataverse_webform']);
     
-    // Clear state entries
+    // Clear state entries.
+    /** @var \Drupal\Core\State\StateInterface $state */
     $state = \Drupal::state();
     $keys_to_delete = dataverse_webform_get_state_keys_to_clean();
     
-    // Delete state entries
+    // Delete state entries.
     foreach ($keys_to_delete as $key) {
       $state->delete($key);
     }
@@ -380,6 +411,7 @@ function dataverse_webform_clean_cache_and_state(): void {
  */
 function dataverse_webform_get_state_keys_to_clean(): array {
   try {
+    /** @var \Drupal\Core\Database\Connection $connection */
     $connection = \Drupal::database();
     $result = $connection->select('key_value', 'kv')
       ->fields('kv', ['name'])

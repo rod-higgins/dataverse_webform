@@ -37,10 +37,16 @@ class DataverseTestForm extends FormBase {
     );
   }
 
+  /**
+   * {@inheritdoc}
+   */
   public function getFormId(): string {
     return 'dataverse_webform_test_form';
   }
 
+  /**
+   * {@inheritdoc}
+   */
   public function buildForm(array $form, FormStateInterface $form_state): array {
     $form['description'] = [
       '#markup' => '<p>' . $this->t('Use this form to test your Dataverse connection and Azure AD authentication.') . '</p>',
@@ -54,10 +60,16 @@ class DataverseTestForm extends FormBase {
     return $form;
   }
 
+  /**
+   * {@inheritdoc}
+   */
   public function submitForm(array &$form, FormStateInterface $form_state): void {
-    // Default submit handler - not used for AJAX operations
+    // Default submit handler - not used for AJAX operations.
   }
 
+  /**
+   * Test connection handler.
+   */
   public function testConnection(array &$form, FormStateInterface $form_state): void {
     $this->runTest(function($config) {
       $result = $this->dataverseClient->testConnection($config);
@@ -65,6 +77,9 @@ class DataverseTestForm extends FormBase {
     }, 'Connection', $form_state);
   }
 
+  /**
+   * Test entities handler.
+   */
   public function testEntities(array &$form, FormStateInterface $form_state): void {
     $this->runTest(function($config) {
       $entities = $this->dataverseClient->getEntities($config);
@@ -72,12 +87,18 @@ class DataverseTestForm extends FormBase {
     }, 'Entity retrieval', $form_state);
   }
 
+  /**
+   * Test fields handler.
+   */
   public function testFields(array &$form, FormStateInterface $form_state): void {
     $this->runTest(function($config) {
       return $this->testFieldsForEntities($config, self::TEST_ENTITIES);
     }, 'Field retrieval', $form_state);
   }
 
+  /**
+   * Test multi-entity operations handler.
+   */
   public function testMultiEntity(array &$form, FormStateInterface $form_state): void {
     $this->runTest(function($config) {
       $test_mappings = $this->getTestMappings();
@@ -86,6 +107,9 @@ class DataverseTestForm extends FormBase {
     }, 'Multi-entity test', $form_state);
   }
 
+  /**
+   * Validate configuration handler.
+   */
   public function validateConfiguration(array &$form, FormStateInterface $form_state): void {
     $config = $this->buildConfig($form_state);
 
@@ -97,10 +121,16 @@ class DataverseTestForm extends FormBase {
     }
   }
 
+  /**
+   * AJAX callback for test results.
+   */
   public function ajaxTestCallback(array &$form, FormStateInterface $form_state): array {
     return $form['test_results'];
   }
 
+  /**
+   * Build Azure AD configuration section.
+   */
   protected function buildAzureAdSection(array &$form): void {
     $form['azure_config'] = [
       '#type' => 'details',
@@ -133,6 +163,9 @@ class DataverseTestForm extends FormBase {
     ];
   }
 
+  /**
+   * Build Dataverse configuration section.
+   */
   protected function buildDataverseSection(array &$form): void {
     $form['dataverse_config'] = [
       '#type' => 'details',
@@ -149,6 +182,9 @@ class DataverseTestForm extends FormBase {
     ];
   }
 
+  /**
+   * Build test configuration section.
+   */
   protected function buildTestSection(array &$form): void {
     $form['test_config'] = [
       '#type' => 'details',
@@ -178,6 +214,9 @@ class DataverseTestForm extends FormBase {
     ];
   }
 
+  /**
+   * Build actions section with test buttons.
+   */
   protected function buildActionsSection(array &$form): void {
     $form['actions'] = ['#type' => 'actions'];
 
@@ -203,6 +242,9 @@ class DataverseTestForm extends FormBase {
     }
   }
 
+  /**
+   * Run test function with error handling.
+   */
   protected function runTest(callable $test_function, string $test_name, FormStateInterface $form_state): void {
     $config = $this->buildConfig($form_state);
 
@@ -220,6 +262,9 @@ class DataverseTestForm extends FormBase {
     }
   }
 
+  /**
+   * Format entities retrieval result.
+   */
   protected function formatEntitiesResult(array $entities): string {
     $count = count($entities);
     
@@ -235,6 +280,9 @@ class DataverseTestForm extends FormBase {
     return 'No entities retrieved. This may indicate permission restrictions.';
   }
 
+  /**
+   * Test fields for multiple entities.
+   */
   protected function testFieldsForEntities(array $config, array $test_entities): string {
     $success_count = 0;
     $total_fields = 0;
@@ -261,6 +309,9 @@ class DataverseTestForm extends FormBase {
     return 'Failed to retrieve fields from any test entities. Please check entity permissions.';
   }
 
+  /**
+   * Get test field mappings.
+   */
   protected function getTestMappings(): array {
     return [
       ['webform_field' => 'test_field_1', 'entity' => 'contacts', 'field' => 'firstname', 'transform' => 'string', 'required' => false],
@@ -268,6 +319,9 @@ class DataverseTestForm extends FormBase {
     ];
   }
 
+  /**
+   * Format validation results.
+   */
   protected function formatValidationResults(array $validation_results, int $total_mappings): string {
     $valid_mappings = array_reduce($validation_results, function($count, $result) {
       return $count + ($result['entity_exists'] && $result['field_exists'] ? 1 : 0);
@@ -280,6 +334,9 @@ class DataverseTestForm extends FormBase {
     return "Multi-entity validation partially successful. {$valid_mappings}/{$total_mappings} test mappings are valid.";
   }
 
+  /**
+   * Display validation results.
+   */
   protected function displayValidationResults(array $results): void {
     if ($results['valid']) {
       $this->messenger()->addStatus($this->t('✅ Configuration is valid and ready for use.'));
@@ -310,6 +367,9 @@ class DataverseTestForm extends FormBase {
     }
   }
 
+  /**
+   * Build configuration from form state.
+   */
   protected function buildConfig(FormStateInterface $form_state): array {
     return [
       'enabled' => true,
@@ -322,8 +382,11 @@ class DataverseTestForm extends FormBase {
     ];
   }
 
+  /**
+   * Convert action name to method name.
+   */
   protected function convertActionToMethod(string $action): string {
-    // Convert snake_case to camelCase for method names
+    // Convert snake_case to camelCase for method names.
     $parts = explode('_', $action);
     $method = array_shift($parts);
     foreach ($parts as $part) {

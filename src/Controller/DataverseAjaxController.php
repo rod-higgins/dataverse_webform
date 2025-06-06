@@ -37,6 +37,9 @@ class DataverseAjaxController extends ControllerBase {
     );
   }
 
+  /**
+   * Get entities endpoint.
+   */
   public function getEntities(Request $request): JsonResponse {
     try {
       $this->checkRateLimit($request);
@@ -60,6 +63,9 @@ class DataverseAjaxController extends ControllerBase {
     }
   }
 
+  /**
+   * Get entity fields endpoint.
+   */
   public function getEntityFields(Request $request): JsonResponse {
     try {
       $this->checkRateLimit($request);
@@ -89,6 +95,9 @@ class DataverseAjaxController extends ControllerBase {
     }
   }
 
+  /**
+   * Validate configuration endpoint.
+   */
   public function validateConfiguration(Request $request): JsonResponse {
     try {
       $this->checkRateLimit($request);
@@ -96,7 +105,7 @@ class DataverseAjaxController extends ControllerBase {
       $config = $this->extractConfigFromRequest($request);
       $validation_results = $this->configManager->validateConfiguration($config);
 
-      // Test connection if basic validation passes
+      // Test connection if basic validation passes.
       $connection_test = false;
       if ($validation_results['valid']) {
         try {
@@ -118,6 +127,9 @@ class DataverseAjaxController extends ControllerBase {
     }
   }
 
+  /**
+   * Get field mapping suggestions endpoint.
+   */
   public function getFieldMappingSuggestions(Request $request): JsonResponse {
     try {
       $this->checkRateLimit($request);
@@ -148,6 +160,9 @@ class DataverseAjaxController extends ControllerBase {
     }
   }
 
+  /**
+   * Format entities for JSON response.
+   */
   protected function formatEntitiesForResponse(array $entities): array {
     $entity_options = [];
     $count = 0;
@@ -170,6 +185,9 @@ class DataverseAjaxController extends ControllerBase {
     return $entity_options;
   }
 
+  /**
+   * Format fields for JSON response.
+   */
   protected function formatFieldsForResponse(array $fields): array {
     $field_options = [];
     $count = 0;
@@ -196,6 +214,9 @@ class DataverseAjaxController extends ControllerBase {
     return $field_options;
   }
 
+  /**
+   * Generate mapping suggestions for fields.
+   */
   protected function generateMappingSuggestions(array $config, array $webform_fields, array $target_entities): array {
     $suggestions = [];
 
@@ -218,43 +239,9 @@ class DataverseAjaxController extends ControllerBase {
     return $suggestions;
   }
 
-  protected function buildConfigFromRequest(Request $request): array {
-    return [
-      'enabled' => true,
-      'dataverse_url' => $request->query->get('dataverse_url', ''),
-      'azure_tenant_id' => $request->query->get('azure_tenant_id', ''),
-      'azure_client_id_key' => $request->query->get('azure_client_id_key', ''),
-      'azure_client_secret_key' => $request->query->get('azure_client_secret_key', ''),
-      'timeout' => (int) $request->query->get('timeout', 30),
-    ];
-  }
-
-  protected function extractConfigFromRequest(Request $request): array {
-    $config = [];
-    $content = $request->getContent();
-    
-    if (!empty($content)) {
-      $data = json_decode($content, true);
-      if (json_last_error() === JSON_ERROR_NONE && is_array($data)) {
-        $config = $data;
-      }
-    }
-
-    if (empty($config)) {
-      $config = $this->buildConfigFromRequest($request);
-    }
-
-    return $config;
-  }
-
-  protected function validateRequiredConfig(array $config, array $required_fields): void {
-    $missing_fields = array_filter($required_fields, fn($field) => empty($config[$field]));
-
-    if (!empty($missing_fields)) {
-      throw DataverseException::configurationError('Missing required configuration: ' . implode(', ', $missing_fields));
-    }
-  }
-
+  /**
+   * Generate suggestions for individual field mappings.
+   */
   protected function generateFieldMappingSuggestions(array $webform_fields, array $entity_fields): array {
     $suggestions = [];
     $common_mappings = $this->getCommonFieldMappings();
@@ -263,20 +250,20 @@ class DataverseAjaxController extends ControllerBase {
       $webform_lower = strtolower($webform_field);
       $best_matches = [];
 
-      // Check for exact matches first
+      // Check for exact matches first.
       $best_matches = $this->findExactMatches($webform_lower, $entity_fields);
 
-      // Check common mappings if no exact matches
+      // Check common mappings if no exact matches.
       if (empty($best_matches)) {
         $best_matches = $this->findCommonMappingMatches($webform_lower, $entity_fields, $common_mappings);
       }
 
-      // Check for partial matches if still no matches
+      // Check for partial matches if still no matches.
       if (empty($best_matches)) {
         $best_matches = $this->findPartialMatches($webform_lower, $entity_fields);
       }
 
-      // Sort by confidence and take top suggestions
+      // Sort by confidence and take top suggestions.
       usort($best_matches, fn($a, $b) => $b['confidence'] - $a['confidence']);
       $suggestions[$webform_field] = array_slice($best_matches, 0, 3);
     }
@@ -284,6 +271,9 @@ class DataverseAjaxController extends ControllerBase {
     return $suggestions;
   }
 
+  /**
+   * Get common field mappings.
+   */
   protected function getCommonFieldMappings(): array {
     return [
       'first_name' => ['firstname', 'fname', 'givenname'],
@@ -302,6 +292,9 @@ class DataverseAjaxController extends ControllerBase {
     ];
   }
 
+  /**
+   * Find exact field name matches.
+   */
   protected function findExactMatches(string $webform_lower, array $entity_fields): array {
     $matches = [];
     
@@ -321,6 +314,9 @@ class DataverseAjaxController extends ControllerBase {
     return $matches;
   }
 
+  /**
+   * Find matches based on common mapping patterns.
+   */
   protected function findCommonMappingMatches(string $webform_lower, array $entity_fields, array $common_mappings): array {
     $matches = [];
     
@@ -344,13 +340,16 @@ class DataverseAjaxController extends ControllerBase {
     return $matches;
   }
 
+  /**
+   * Find partial name matches.
+   */
   protected function findPartialMatches(string $webform_lower, array $entity_fields): array {
     $matches = [];
     
     foreach ($entity_fields as $entity_field) {
       $entity_lower = strtolower($entity_field['logical_name']);
       
-      // Check if webform field is contained in entity field or vice versa
+      // Check if webform field is contained in entity field or vice versa.
       if (strpos($entity_lower, $webform_lower) !== false || 
           strpos($webform_lower, $entity_lower) !== false) {
         $matches[] = [
@@ -365,6 +364,55 @@ class DataverseAjaxController extends ControllerBase {
     return $matches;
   }
 
+  /**
+   * Build configuration from request parameters.
+   */
+  protected function buildConfigFromRequest(Request $request): array {
+    return [
+      'enabled' => true,
+      'dataverse_url' => $request->query->get('dataverse_url', ''),
+      'azure_tenant_id' => $request->query->get('azure_tenant_id', ''),
+      'azure_client_id_key' => $request->query->get('azure_client_id_key', ''),
+      'azure_client_secret_key' => $request->query->get('azure_client_secret_key', ''),
+      'timeout' => (int) $request->query->get('timeout', 30),
+    ];
+  }
+
+  /**
+   * Extract configuration from request body.
+   */
+  protected function extractConfigFromRequest(Request $request): array {
+    $config = [];
+    $content = $request->getContent();
+    
+    if (!empty($content)) {
+      $data = json_decode($content, true);
+      if (json_last_error() === JSON_ERROR_NONE && is_array($data)) {
+        $config = $data;
+      }
+    }
+
+    if (empty($config)) {
+      $config = $this->buildConfigFromRequest($request);
+    }
+
+    return $config;
+  }
+
+  /**
+   * Validate required configuration fields.
+   */
+  protected function validateRequiredConfig(array $config, array $required_fields): void {
+    $missing_fields = array_filter($required_fields, fn($field) => empty($config[$field]));
+
+    if (!empty($missing_fields)) {
+      throw DataverseException::configurationError('Missing required configuration: ' . implode(', ', $missing_fields));
+    }
+  }
+
+  /**
+   * Create success response.
+   */
   protected function createSuccessResponse(array $data): JsonResponse {
     return new JsonResponse(array_merge([
       'success' => true,
@@ -372,6 +420,9 @@ class DataverseAjaxController extends ControllerBase {
     ], $data));
   }
 
+  /**
+   * Create error response.
+   */
   protected function createErrorResponse(string $message, string $error_type, int $status_code): JsonResponse {
     return new JsonResponse([
       'success' => false,
@@ -381,6 +432,9 @@ class DataverseAjaxController extends ControllerBase {
     ], $status_code);
   }
 
+  /**
+   * Log unexpected errors.
+   */
   protected function logUnexpectedError(string $method, \Exception $e): void {
     $this->getLogger('dataverse_webform')->error(
       'Unexpected error in @method: @error',
@@ -392,6 +446,9 @@ class DataverseAjaxController extends ControllerBase {
     );
   }
 
+  /**
+   * Check rate limiting for AJAX requests.
+   */
   protected function checkRateLimit(Request $request): void {
     $client_ip = $request->getClientIp();
     $rate_limit_key = 'dataverse_webform:ajax_rate_limit:' . hash('sha256', $client_ip);
