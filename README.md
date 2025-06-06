@@ -1,17 +1,6 @@
-# Dataverse Webform Integration v2.0
+# Dataverse Webform Integration v1.0.0
 
 A comprehensive Drupal module that integrates Webform submissions with Microsoft Dataverse via the OData API, featuring **multi-entity mapping support**, secure Azure AD authentication, and advanced data processing capabilities.
-
-## 🆕 What's New in v2.0
-
-- ✨ **Multi-Entity Field Mapping**: Map individual webform fields to different Dataverse entities within the same form
-- 🔧 **Enhanced Configuration Management**: Improved validation and error handling
-- 🚀 **Advanced Data Processing**: Support for data transformations and field validation
-- 📊 **Batch Processing**: Efficient handling of multiple entity creation
-- 🎛️ **Interactive Admin Interface**: Dynamic entity and field loading with AJAX
-- 🔍 **Comprehensive Testing Tools**: Enhanced connection testing and validation
-- 📈 **Performance Optimizations**: Intelligent caching and rate limiting
-- 🛡️ **Enhanced Security**: Improved input validation and error handling
 
 ## Features
 
@@ -26,7 +15,6 @@ A comprehensive Drupal module that integrates Webform submissions with Microsoft
 - ✅ **Comprehensive Logging**: Detailed logging and error reporting
 - ✅ **Batch Processing**: Configurable batch sizes for optimal performance
 - ✅ **Connection Testing**: Advanced tools to test and validate configurations
-- ✅ **Configuration Migration**: Automatic upgrade from v1.x single-entity configurations
 
 ## Requirements
 
@@ -309,9 +297,6 @@ $keys = $config_manager->getAzureCredentialKeys();
 // Validate configuration
 $validation = $config_manager->validateConfiguration($config);
 
-// Convert legacy configuration
-$new_config = $config_manager->convertLegacyConfiguration($old_config);
-
 // Get entities from mappings
 $entities = $config_manager->getEntitiesFromMappings($field_mappings);
 ```
@@ -412,52 +397,6 @@ $entities = $config_manager->getEntitiesFromMappings($field_mappings);
 4. Test API connectivity using external tools
 5. Validate Dataverse user permissions and security roles
 
-## Migration from v1.x
-
-### Automatic Configuration Upgrade
-
-The module automatically detects and upgrades v1.x configurations:
-
-```php
-// Old v1.x format (single entity)
-$old_config = [
-  'target_entity' => 'contacts',
-  'field_mapping' => [
-    'first_name' => 'firstname',
-    'last_name' => 'lastname',
-  ],
-];
-
-// Automatically converted to v2.x format (multi-entity)
-$new_config = [
-  'field_mappings' => [
-    [
-      'webform_field' => 'first_name',
-      'entity' => 'contacts',
-      'field' => 'firstname',
-      'transform' => 'none',
-      'required' => false,
-    ],
-    [
-      'webform_field' => 'last_name',
-      'entity' => 'contacts',
-      'field' => 'lastname',
-      'transform' => 'none',
-      'required' => false,
-    ],
-  ],
-  'submission_order' => ['contacts'],
-];
-```
-
-### Manual Migration Steps
-
-1. **Backup Configurations**: Export existing webform configurations
-2. **Update Module**: Install v2.0 (automatic upgrade runs)
-3. **Review Mappings**: Check converted field mappings
-4. **Test Functionality**: Use test tools to verify operation
-5. **Enhance Mappings**: Add multi-entity mappings as needed
-
 ## Support and Contributing
 
 ### Getting Help
@@ -498,22 +437,4 @@ GPL-2.0-or-later
 
 ---
 
-## Changelog
-
-### v2.0.0
-- **NEW**: Multi-entity field mapping support
-- **NEW**: Advanced data transformation capabilities
-- **NEW**: Enhanced admin interface with AJAX
-- **NEW**: Comprehensive testing and validation tools
-- **NEW**: Batch processing and performance optimizations
-- **NEW**: Automatic migration from v1.x configurations
-- **IMPROVED**: Security with enhanced input validation
-- **IMPROVED**: Error handling and logging
-- **IMPROVED**: Configuration management and validation
-- **IMPROVED**: Documentation and examples
-
-### v1.0.0
-- Initial release with single-entity mapping
-- Basic Azure AD authentication
-- Simple field mapping interface
-- Core Dataverse integration
+**Dataverse Webform Integration v1.0.0** - Comprehensive multi-entity integration between Drupal Webforms and Microsoft Dataverse with advanced security, performance optimization, and user-friendly configuration tools.
