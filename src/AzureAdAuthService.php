@@ -5,41 +5,55 @@ namespace Drupal\dataverse_webform;
 use Drupal\Core\Http\ClientFactory;
 use Drupal\Core\Logger\LoggerChannelFactoryInterface;
 use Drupal\Core\State\StateInterface;
+use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\key\KeyRepositoryInterface;
+use Drupal\dataverse_webform\Exception\DataverseException;
 use GuzzleHttp\Exception\RequestException;
 
 /**
- * Azure AD authentication service for Dataverse.
+ * Azure AD authentication service for Dataverse with enhanced security.
  */
 class AzureAdAuthService {
 
   /**
-   * The HTTP client factory.
-   *
-   * @var \Drupal\Core\Http\ClientFactory
+   * Azure AD OAuth 2.0 endpoint template.
    */
-  protected $httpClientFactory;
+  public const OAUTH_ENDPOINT_TEMPLATE = 'https://login.microsoftonline.com/%s/oauth2/v2.0/token';
+
+  /**
+   * Default token expiration buffer in seconds.
+   */
+  public const TOKEN_EXPIRATION_BUFFER = 60;
+
+  /**
+   * Maximum token lifetime in seconds (24 hours).
+   */
+  public const MAX_TOKEN_LIFETIME = 86400;
+
+  /**
+   * The HTTP client factory.
+   */
+  protected ClientFactory $httpClientFactory;
 
   /**
    * The logger factory.
-   *
-   * @var \Drupal\Core\Logger\LoggerChannelFactoryInterface
    */
-  protected $loggerFactory;
+  protected LoggerChannelFactoryInterface $loggerFactory;
 
   /**
    * The state service.
-   *
-   * @var \Drupal\Core\State\StateInterface
    */
-  protected $state;
+  protected StateInterface $state;
 
   /**
    * The key repository service.
-   *
-   * @var \Drupal\key\KeyRepositoryInterface
    */
-  protected $keyRepository;
+  protected KeyRepositoryInterface $keyRepository;
+
+  /**
+   * The config factory service.
+   */
+  protected ConfigFactoryInterface $configFactory;
 
   /**
    * Constructs an AzureAdAuthService object.
@@ -52,17 +66,21 @@ class AzureAdAuthService {
    *   The state service.
    * @param \Drupal\key\KeyRepositoryInterface $key_repository
    *   The key repository service.
+   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
+   *   The config factory service.
    */
   public function __construct(
     ClientFactory $http_client_factory,
     LoggerChannelFactoryInterface $logger_factory,
     StateInterface $state,
-    KeyRepositoryInterface $key_repository
+    KeyRepositoryInterface $key_repository,
+    ConfigFactoryInterface $config_factory
   ) {
     $this->httpClientFactory = $http_client_factory;
     $this->loggerFactory = $logger_factory;
     $this->state = $state;
     $this->keyRepository = $key_repository;
+    $this->configFactory = $config_factory;
   }
 
   /**
@@ -73,8 +91,14 @@ class AzureAdAuthService {
    *
    * @return string|null
    *   The access token or NULL on failure.
+   *
+   * @throws \Drupal\dataverse_webform\Exception\DataverseException
+   *   When authentication fails.
    */
-  public function getAccessToken(array $config) {
+  public function getAccessToken(array $config): ?string {
+    // Validate configuration
+    $this->validateAuthConfig($config);
+
     // Check if we have a cached valid token
     $cached_token = $this->getCachedToken($config);
     if ($cached_token) {
@@ -87,14 +111,15 @@ class AzureAdAuthService {
     $tenant_id = $config['azure_tenant_id'] ?? '';
 
     if (empty($client_id) || empty($client_secret) || empty($tenant_id)) {
-      $this->loggerFactory->get('dataverse_webform')->error('Missing Azure AD configuration');
-      return NULL;
+      throw new DataverseException('Missing Azure AD configuration');
     }
 
     try {
       $client = $this->httpClientFactory->fromOptions(['timeout' => 30]);
       
-      $response = $client->post("https://login.microsoftonline.com/{$tenant_id}/oauth2/v2.0/token", [
+      $oauth_url = sprintf(self::OAUTH_ENDPOINT_TEMPLATE, $tenant_id);
+      
+      $response = $client->post($oauth_url, [
         'form_params' => [
           'client_id' => $client_id,
           'client_secret' => $client_secret,
@@ -106,22 +131,69 @@ class AzureAdAuthService {
         ],
       ]);
 
-      $body = json_decode($response->getBody()->getContents(), TRUE);
+      $content = $response->getBody()->getContents();
+      $body = json_decode($content, true);
+      
+      if (json_last_error() !== JSON_ERROR_NONE) {
+        throw new DataverseException('Invalid JSON response from Azure AD');
+      }
       
       if (isset($body['access_token'])) {
+        $expires_in = (int) ($body['expires_in'] ?? 3600);
+        
+        // Validate token expiration is reasonable
+        if ($expires_in > self::MAX_TOKEN_LIFETIME) {
+          $expires_in = self::MAX_TOKEN_LIFETIME;
+        }
+        
         // Cache the token with expiration
-        $this->cacheToken($config, $body['access_token'], $body['expires_in'] ?? 3600);
+        $this->cacheToken($config, $body['access_token'], $expires_in);
+        
+        $this->loggerFactory->get('dataverse_webform')->info(
+          'Successfully obtained Azure AD access token, expires in @expires seconds',
+          ['@expires' => $expires_in]
+        );
+        
         return $body['access_token'];
       }
 
-    } catch (RequestException $e) {
-      $this->loggerFactory->get('dataverse_webform')->error(
-        'Azure AD authentication failed: @error',
-        ['@error' => $e->getMessage()]
-      );
-    }
+      // Handle Azure AD error response
+      $error = $body['error'] ?? 'unknown_error';
+      $error_description = $body['error_description'] ?? 'No error description provided';
+      
+      throw new DataverseException("Azure AD authentication failed: {$error} - {$error_description}");
 
-    return NULL;
+    } catch (RequestException $e) {
+      $error_message = 'Azure AD authentication request failed: ' . $e->getMessage();
+      $this->loggerFactory->get('dataverse_webform')->error($error_message);
+      throw new DataverseException($error_message, 0, $e);
+    }
+  }
+
+  /**
+   * Invalidate cached token for specific configuration.
+   *
+   * @param array $config
+   *   Configuration array.
+   */
+  public function invalidateToken(array $config): void {
+    $cache_key = $this->buildCacheKey($config);
+    $this->state->delete($cache_key);
+    
+    $this->loggerFactory->get('dataverse_webform')->info('Invalidated cached Azure AD token');
+  }
+
+  /**
+   * Check if current configuration has a valid cached token.
+   *
+   * @param array $config
+   *   Configuration array.
+   *
+   * @return bool
+   *   TRUE if valid token exists, FALSE otherwise.
+   */
+  public function hasValidToken(array $config): bool {
+    return $this->getCachedToken($config) !== null;
   }
 
   /**
@@ -132,14 +204,31 @@ class AzureAdAuthService {
    *
    * @return string|null
    *   The key value or NULL if not found.
+   *
+   * @throws \Drupal\dataverse_webform\Exception\DataverseException
+   *   When key cannot be retrieved.
    */
-  protected function getKeyValue($key_id) {
+  protected function getKeyValue(string $key_id): ?string {
     if (empty($key_id)) {
-      return NULL;
+      return null;
     }
 
-    $key = $this->keyRepository->getKey($key_id);
-    return $key ? $key->getKeyValue() : NULL;
+    try {
+      $key = $this->keyRepository->getKey($key_id);
+      if (!$key) {
+        throw new DataverseException("Key '{$key_id}' not found");
+      }
+
+      $value = $key->getKeyValue();
+      if (empty($value)) {
+        throw new DataverseException("Key '{$key_id}' has no value");
+      }
+
+      return $value;
+      
+    } catch (\Exception $e) {
+      throw new DataverseException("Failed to retrieve key '{$key_id}': " . $e->getMessage(), 0, $e);
+    }
   }
 
   /**
@@ -151,15 +240,20 @@ class AzureAdAuthService {
    * @return string|null
    *   The cached token or NULL if expired/not found.
    */
-  protected function getCachedToken(array $config) {
-    $cache_key = 'dataverse_webform.token.' . md5(serialize($config));
+  protected function getCachedToken(array $config): ?string {
+    $cache_key = $this->buildCacheKey($config);
     $cached_data = $this->state->get($cache_key);
 
-    if ($cached_data && $cached_data['expires'] > time()) {
-      return $cached_data['token'];
+    if ($cached_data && is_array($cached_data)) {
+      $expires = $cached_data['expires'] ?? 0;
+      $token = $cached_data['token'] ?? '';
+      
+      if (!empty($token) && $expires > time()) {
+        return $token;
+      }
     }
 
-    return NULL;
+    return null;
   }
 
   /**
@@ -172,13 +266,77 @@ class AzureAdAuthService {
    * @param int $expires_in
    *   Token lifetime in seconds.
    */
-  protected function cacheToken(array $config, $token, $expires_in) {
-    $cache_key = 'dataverse_webform.token.' . md5(serialize($config));
+  protected function cacheToken(array $config, string $token, int $expires_in): void {
+    $cache_key = $this->buildCacheKey($config);
     
-    $this->state->set($cache_key, [
+    $cache_data = [
       'token' => $token,
-      'expires' => time() + $expires_in - 60, // Expire 60 seconds early for safety
-    ]);
+      'expires' => time() + $expires_in - self::TOKEN_EXPIRATION_BUFFER,
+      'created' => time(),
+    ];
+    
+    $this->state->set($cache_key, $cache_data);
+  }
+
+  /**
+   * Build cache key for token storage.
+   *
+   * @param array $config
+   *   Configuration array.
+   *
+   * @return string
+   *   The cache key.
+   */
+  protected function buildCacheKey(array $config): string {
+    // Use only relevant config for cache key
+    $cache_config = [
+      'azure_tenant_id' => $config['azure_tenant_id'] ?? '',
+      'azure_client_id_key' => $config['azure_client_id_key'] ?? '',
+      'dataverse_url' => $config['dataverse_url'] ?? '',
+    ];
+    
+    return 'dataverse_webform.token.' . hash('sha256', serialize($cache_config));
+  }
+
+  /**
+   * Validate Azure AD authentication configuration.
+   *
+   * @param array $config
+   *   Configuration array to validate.
+   *
+   * @throws \Drupal\dataverse_webform\Exception\DataverseException
+   *   When configuration is invalid.
+   */
+  protected function validateAuthConfig(array $config): void {
+    $required_fields = [
+      'azure_tenant_id',
+      'azure_client_id_key',
+      'azure_client_secret_key',
+      'dataverse_url',
+    ];
+
+    foreach ($required_fields as $field) {
+      if (empty($config[$field])) {
+        throw new DataverseException("Missing required Azure AD configuration: {$field}");
+      }
+    }
+
+    // Validate tenant ID format (GUID)
+    $tenant_id = $config['azure_tenant_id'];
+    if (!preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $tenant_id)) {
+      throw new DataverseException('Azure Tenant ID must be a valid GUID format');
+    }
+
+    // Validate URL format
+    $dataverse_url = $config['dataverse_url'];
+    if (!filter_var($dataverse_url, FILTER_VALIDATE_URL)) {
+      throw new DataverseException('Dataverse URL must be a valid URL');
+    }
+
+    // Ensure URL is HTTPS for security
+    if (strpos($dataverse_url, 'https://') !== 0) {
+      throw new DataverseException('Dataverse URL must use HTTPS');
+    }
   }
 
 }

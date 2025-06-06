@@ -1,8 +1,36 @@
 services:
   dataverse_webform.azure_auth:
     class: Drupal\dataverse_webform\AzureAdAuthService
-    arguments: ['@http_client_factory', '@logger.factory', '@state', '@key.repository']
+    arguments: 
+      - '@http_client_factory'
+      - '@logger.factory'
+      - '@state'
+      - '@key.repository'
+      - '@config.factory'
   
   dataverse_webform.dataverse_client:
     class: Drupal\dataverse_webform\DataverseClient
-    arguments: ['@http_client_factory', '@logger.factory', '@dataverse_webform.azure_auth', '@cache.default']
+    arguments: 
+      - '@http_client_factory'
+      - '@logger.factory'
+      - '@dataverse_webform.azure_auth'
+      - '@cache.default'
+      - '@dataverse_webform.validator'
+      - '@dataverse_webform.submission_processor'
+
+  dataverse_webform.validator:
+    class: Drupal\dataverse_webform\ValidationService
+    arguments:
+      - '@logger.factory'
+
+  dataverse_webform.submission_processor:
+    class: Drupal\dataverse_webform\SubmissionProcessor
+    arguments:
+      - '@logger.factory'
+      - '@dataverse_webform.validator'
+
+  dataverse_webform.config_manager:
+    class: Drupal\dataverse_webform\ConfigurationManager
+    arguments:
+      - '@key.repository'
+      - '@dataverse_webform.validator'

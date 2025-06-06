@@ -1,7 +1,6 @@
-dataverse_webform.test:
-  path: '/admin/config/services/dataverse/test'
-  defaults:
-    _form: '\Drupal\dataverse_webform\Form\DataverseTestForm'
-    _title: 'Test Dataverse Connection'
-  requirements:
-    _permission: 'administer dataverse webform'
+dataverse_webform.admin:
+  title: 'Dataverse Integration'
+  route_name: dataverse_webform.test
+  description: 'Configure and test Microsoft Dataverse integration with Webform submissions'
+  parent: system.admin_config_services
+  weight: 10

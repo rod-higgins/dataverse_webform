@@ -1,10 +1,12 @@
 name: 'Dataverse Webform Integration'
 type: module
-description: 'Integrates Webform submissions with Dataverse via OData API'
+description: 'Integrates Webform submissions with Microsoft Dataverse via OData API with multi-entity mapping support'
 core_version_requirement: ^10.4 || ^11
 package: 'Custom'
+version: '1.0.0'
 dependencies:
   - webform:webform
   - field:field
   - system:system
   - key:key
+configure: dataverse_webform.test

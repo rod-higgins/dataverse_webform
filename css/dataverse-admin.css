@@ -1,0 +1,317 @@
+/**
+ * @file
+ * Styles for Dataverse Webform Integration admin interface.
+ */
+
+/* Configuration sections */
+.dataverse-config-section {
+  margin-bottom: 2rem;
+}
+
+.dataverse-config-section .form-item {
+  margin-bottom: 1rem;
+}
+
+/* Field mapping table */
+.field-mapping-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0;
+}
+
+.field-mapping-table th,
+.field-mapping-table td {
+  padding: 0.75rem;
+  border: 1px solid #ddd;
+  vertical-align: top;
+}
+
+.field-mapping-table th {
+  background-color: #f8f9fa;
+  font-weight: 600;
+  text-align: left;
+}
+
+.field-mapping-table .webform-field-info {
+  min-width: 150px;
+}
+
+.field-mapping-table .webform-field-info strong {
+  display: block;
+  margin-bottom: 0.25rem;
+}
+
+.field-mapping-table .webform-field-info small {
+  color: #666;
+  font-style: italic;
+}
+
+.field-mapping-table select,
+.field-mapping-table .form-checkbox {
+  width: 100%;
+  max-width: 200px;
+}
+
+.field-mapping-table .button--small {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.875rem;
+  white-space: nowrap;
+}
+
+/* Auto-mapping button states */
+.button[data-webform-field] {
+  position: relative;
+  transition: all 0.3s ease;
+}
+
+.button[data-webform-field]:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Field suggestions */
+.field-suggestions {
+  margin-top: 0.5rem;
+  padding: 0.5rem;
+  background-color: #f8f9fa;
+  border-radius: 4px;
+  border-left: 4px solid #007cba;
+}
+
+.field-suggestions h4 {
+  margin: 0 0 0.5rem 0;
+  font-size: 0.875rem;
+  color: #333;
+}
+
+.field-suggestion {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.25rem 0;
+  border-bottom: 1px solid #eee;
+}
+
+.field-suggestion:last-child {
+  border-bottom: none;
+}
+
+.field-suggestion-name {
+  font-weight: 500;
+}
+
+.field-suggestion-confidence {
+  font-size: 0.75rem;
+  color: #666;
+  background-color: #e9ecef;
+  padding: 0.125rem 0.25rem;
+  border-radius: 3px;
+}
+
+.field-suggestion-confidence.high {
+  background-color: #d4edda;
+  color: #155724;
+}
+
+.field-suggestion-confidence.medium {
+  background-color: #fff3cd;
+  color: #856404;
+}
+
+.field-suggestion-confidence.low {
+  background-color: #f8d7da;
+  color: #721c24;
+}
+
+/* Validation messages */
+.dataverse-validation-message {
+  margin: 1rem 0;
+  border-radius: 4px;
+}
+
+.dataverse-temp-message {
+  position: relative;
+  z-index: 1000;
+  margin-bottom: 1rem;
+}
+
+/* Form validation states */
+.form-item.has-error .form-control {
+  border-color: #dc3545;
+  box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.075), 0 0 0 3px rgba(220, 53, 69, 0.1);
+}
+
+.form-item.has-warning .form-control {
+  border-color: #ffc107;
+  box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.075), 0 0 0 3px rgba(255, 193, 7, 0.1);
+}
+
+/* Connection test button */
+.connection-test-button {
+  margin: 1rem 0;
+  padding: 0.75rem 1.5rem;
+  background-color: #007cba;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 500;
+  transition: background-color 0.3s ease;
+}
+
+.connection-test-button:hover {
+  background-color: #005a87;
+}
+
+.connection-test-button:disabled {
+  background-color: #6c757d;
+  cursor: not-allowed;
+}
+
+/* Entity and field loading states */
+.loading-entities,
+.loading-fields {
+  position: relative;
+  opacity: 0.6;
+}
+
+.loading-entities::after,
+.loading-fields::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  width: 16px;
+  height: 16px;
+  margin-top: -8px;
+  border: 2px solid #f3f3f3;
+  border-top: 2px solid #007cba;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* Advanced configuration section */
+.advanced-config-section {
+  background-color: #f8f9fa;
+  padding: 1rem;
+  border-radius: 4px;
+  margin: 1rem 0;
+}
+
+.advanced-config-section .form-item {
+  margin-bottom: 1rem;
+}
+
+.advanced-config-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+}
+
+/* Submission order configuration */
+.submission-order-config {
+  margin-top: 1rem;
+  padding: 1rem;
+  background-color: #f8f9fa;
+  border-radius: 4px;
+}
+
+.submission-order-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.submission-order-item {
+  display: flex;
+  align-items: center;
+  padding: 0.5rem;
+  margin: 0.25rem 0;
+  background-color: white;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  cursor: move;
+}
+
+.submission-order-item .drag-handle {
+  margin-right: 0.5rem;
+  color: #666;
+  cursor: grab;
+}
+
+.submission-order-item .drag-handle:active {
+  cursor: grabbing;
+}
+
+/* Status indicators */
+.status-indicator {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  margin-right: 0.5rem;
+}
+
+.status-indicator.success {
+  background-color: #28a745;
+}
+
+.status-indicator.warning {
+  background-color: #ffc107;
+}
+
+.status-indicator.error {
+  background-color: #dc3545;
+}
+
+.status-indicator.info {
+  background-color: #17a2b8;
+}
+
+/* Tooltips */
+.field-info-tooltip {
+  cursor: help;
+  border-bottom: 1px dotted #666;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+  .field-mapping-table {
+    font-size: 0.875rem;
+  }
+  
+  .field-mapping-table th,
+  .field-mapping-table td {
+    padding: 0.5rem;
+  }
+  
+  .advanced-config-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .field-mapping-table select {
+    max-width: 150px;
+  }
+}
+
+/* Print styles */
+@media print {
+  .button,
+  .connection-test-button {
+    display: none;
+  }
+  
+  .field-mapping-table {
+    border: 1px solid #000;
+  }
+  
+  .field-mapping-table th,
+  .field-mapping-table td {
+    border: 1px solid #000;
+  }
+}

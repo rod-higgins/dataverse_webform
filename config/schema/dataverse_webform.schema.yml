@@ -1,0 +1,81 @@
+webform.third_party.dataverse_webform:
+  type: mapping
+  label: 'Dataverse integration settings'
+  mapping:
+    dataverse_config:
+      type: mapping
+      label: 'Dataverse configuration'
+      mapping:
+        enabled:
+          type: boolean
+          label: 'Enable Dataverse integration'
+        azure_tenant_id:
+          type: string
+          label: 'Azure Tenant ID'
+          constraints:
+            Regex:
+              pattern: '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i'
+              message: 'Azure Tenant ID must be a valid GUID format'
+        azure_client_id_key:
+          type: string
+          label: 'Azure Client ID Key'
+        azure_client_secret_key:
+          type: string
+          label: 'Azure Client Secret Key'
+        dataverse_url:
+          type: uri
+          label: 'Dataverse URL'
+        field_mappings:
+          type: sequence
+          label: 'Field mappings'
+          sequence:
+            type: mapping
+            mapping:
+              webform_field:
+                type: string
+                label: 'Webform field name'
+              entity:
+                type: string
+                label: 'Target Dataverse entity'
+              field:
+                type: string
+                label: 'Target Dataverse field'
+              transform:
+                type: string
+                label: 'Data transformation'
+                constraints:
+                  Choice:
+                    choices: ['none', 'string', 'number', 'boolean', 'date', 'email', 'phone']
+              required:
+                type: boolean
+                label: 'Required field'
+              relationship_to:
+                type: string
+                label: 'Related entity field'
+                nullable: true
+        submission_order:
+          type: sequence
+          label: 'Entity submission order'
+          sequence:
+            type: string
+        batch_size:
+          type: integer
+          label: 'Batch processing size'
+          constraints:
+            Range:
+              min: 1
+              max: 100
+        retry_attempts:
+          type: integer
+          label: 'Number of retry attempts'
+          constraints:
+            Range:
+              min: 0
+              max: 5
+        timeout:
+          type: integer
+          label: 'Request timeout in seconds'
+          constraints:
+            Range:
+              min: 5
+              max: 300

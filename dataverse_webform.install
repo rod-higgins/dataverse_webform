@@ -5,11 +5,36 @@
  * Install, update and uninstall functions for the Dataverse Webform module.
  */
 
+use Drupal\Core\Database\Database;
+
 /**
  * Implements hook_requirements().
  */
 function dataverse_webform_requirements($phase) {
   $requirements = [];
+
+  if ($phase == 'install') {
+    // Check if required modules are available
+    $module_handler = \Drupal::service('module_handler');
+    
+    if (!$module_handler->moduleExists('webform')) {
+      $requirements['dataverse_webform_webform'] = [
+        'title' => t('Dataverse Webform Integration'),
+        'value' => t('Webform module required'),
+        'description' => t('The Dataverse Webform Integration module requires the Webform module to be enabled.'),
+        'severity' => REQUIREMENT_ERROR,
+      ];
+    }
+    
+    if (!$module_handler->moduleExists('key')) {
+      $requirements['dataverse_webform_key'] = [
+        'title' => t('Dataverse Webform Integration'),
+        'value' => t('Key module required'),
+        'description' => t('The Dataverse Webform Integration module requires the Key module to be enabled for secure credential storage.'),
+        'severity' => REQUIREMENT_ERROR,
+      ];
+    }
+  }
 
   if ($phase == 'runtime') {
     // Check if required modules are enabled
@@ -38,7 +63,7 @@ function dataverse_webform_requirements($phase) {
       $requirements['dataverse_webform_curl'] = [
         'title' => t('Dataverse Webform Integration'),
         'value' => t('cURL not available'),
-        'description' => t('The Dataverse Webform Integration module requires cURL for HTTP communication.'),
+        'description' => t('The Dataverse Webform Integration module requires cURL for HTTP communication with Dataverse.'),
         'severity' => REQUIREMENT_ERROR,
       ];
     }
@@ -52,16 +77,81 @@ function dataverse_webform_requirements($phase) {
         'severity' => REQUIREMENT_WARNING,
       ];
     }
+    
+    // Check OpenSSL extension
+    if (!extension_loaded('openssl')) {
+      $requirements['dataverse_webform_openssl'] = [
+        'title' => t('Dataverse Webform Integration'),
+        'value' => t('OpenSSL extension not available'),
+        'description' => t('The OpenSSL extension is required for secure communication with Azure AD and Dataverse.'),
+        'severity' => REQUIREMENT_ERROR,
+      ];
+    }
+    
+    // Check JSON extension
+    if (!extension_loaded('json')) {
+      $requirements['dataverse_webform_json'] = [
+        'title' => t('Dataverse Webform Integration'),
+        'value' => t('JSON extension not available'),
+        'description' => t('The JSON extension is required for API communication with Dataverse.'),
+        'severity' => REQUIREMENT_ERROR,
+      ];
+    }
+    
+    // Check for configured webforms with Dataverse integration
+    $webforms_with_dataverse = dataverse_webform_get_configured_webforms();
+    if (!empty($webforms_with_dataverse)) {
+      $count = count($webforms_with_dataverse);
+      $requirements['dataverse_webform_configured'] = [
+        'title' => t('Dataverse Webform Integration'),
+        'value' => t('@count webform(s) configured', ['@count' => $count]),
+        'description' => t('Dataverse integration is active on @count webform(s): @forms', [
+          '@count' => $count,
+          '@forms' => implode(', ', array_keys($webforms_with_dataverse)),
+        ]),
+        'severity' => REQUIREMENT_INFO,
+      ];
+    }
+    
+    // Check for any configuration issues
+    $config_issues = dataverse_webform_check_configuration_issues();
+    if (!empty($config_issues)) {
+      $requirements['dataverse_webform_config_issues'] = [
+        'title' => t('Dataverse Webform Integration'),
+        'value' => t('Configuration issues detected'),
+        'description' => t('The following configuration issues were found: @issues', [
+          '@issues' => implode(', ', $config_issues),
+        ]),
+        'severity' => REQUIREMENT_WARNING,
+      ];
+    }
   }
 
   return $requirements;
 }
 
 /**
+ * Implements hook_install().
+ */
+function dataverse_webform_install() {
+  // Set default configuration values
+  $config = \Drupal::configFactory()->getEditable('dataverse_webform.settings');
+  $config->set('default_timeout', 30);
+  $config->set('default_batch_size', 10);
+  $config->set('default_retry_attempts', 3);
+  $config->set('cache_entity_metadata_hours', 1);
+  $config->save();
+  
+  \Drupal::messenger()->addStatus(t('Dataverse Webform Integration module has been installed successfully. Configure your Azure AD credentials using the <a href="@url">Key module</a>, then test your connection.', [
+    '@url' => \Drupal::url('entity.key.collection'),
+  ]));
+}
+
+/**
  * Implements hook_uninstall().
  */
 function dataverse_webform_uninstall() {
-  // Clean up any third-party settings
+  // Clean up any third-party settings from webforms
   $webforms = \Drupal::entityTypeManager()->getStorage('webform')->loadMultiple();
   
   foreach ($webforms as $webform) {
@@ -70,4 +160,258 @@ function dataverse_webform_uninstall() {
       $webform->save();
     }
   }
+  
+  // Clear cache entries
+  $cache_backend = \Drupal::cache('default');
+  $cache_backend->deleteAll();
+  
+  // Clear state entries (cached tokens)
+  $state = \Drupal::state();
+  $state_keys = $state->getMultiple([]);
+  foreach ($state_keys as $key => $value) {
+    if (strpos($key, 'dataverse_webform.') === 0) {
+      $state->delete($key);
+    }
+  }
+  
+  // Remove configuration
+  \Drupal::configFactory()->getEditable('dataverse_webform.settings')->delete();
+  
+  \Drupal::messenger()->addStatus(t('Dataverse Webform Integration module has been uninstalled. All configuration and cached data have been removed.'));
+}
+
+/**
+ * Update 8001: Convert legacy single-entity configurations to multi-entity format.
+ */
+function dataverse_webform_update_8001() {
+  $config_manager = \Drupal::service('dataverse_webform.config_manager');
+  $webforms = \Drupal::entityTypeManager()->getStorage('webform')->loadMultiple();
+  $converted_count = 0;
+  
+  foreach ($webforms as $webform) {
+    $dataverse_config = $webform->getThirdPartySetting('dataverse_webform', 'dataverse_config');
+    
+    if (!empty($dataverse_config) && 
+        !empty($dataverse_config['target_entity']) && 
+        !empty($dataverse_config['field_mapping']) && 
+        empty($dataverse_config['field_mappings'])) {
+      
+      // Convert old format to new format
+      $new_config = $config_manager->convertLegacyConfiguration($dataverse_config);
+      
+      // Save the converted configuration
+      $webform->setThirdPartySetting('dataverse_webform', 'dataverse_config', $new_config);
+      $webform->save();
+      
+      $converted_count++;
+    }
+  }
+  
+  return t('Converted @count webform(s) from legacy single-entity configuration to new multi-entity format.', [
+    '@count' => $converted_count,
+  ]);
+}
+
+/**
+ * Update 8002: Add default advanced configuration settings.
+ */
+function dataverse_webform_update_8002() {
+  $webforms = \Drupal::entityTypeManager()->getStorage('webform')->loadMultiple();
+  $updated_count = 0;
+  
+  foreach ($webforms as $webform) {
+    $dataverse_config = $webform->getThirdPartySetting('dataverse_webform', 'dataverse_config');
+    
+    if (!empty($dataverse_config) && !empty($dataverse_config['enabled'])) {
+      $updated = false;
+      
+      // Add missing advanced settings with defaults
+      if (!isset($dataverse_config['batch_size'])) {
+        $dataverse_config['batch_size'] = 10;
+        $updated = true;
+      }
+      
+      if (!isset($dataverse_config['retry_attempts'])) {
+        $dataverse_config['retry_attempts'] = 3;
+        $updated = true;
+      }
+      
+      if (!isset($dataverse_config['timeout'])) {
+        $dataverse_config['timeout'] = 30;
+        $updated = true;
+      }
+      
+      if (!isset($dataverse_config['stop_on_error'])) {
+        $dataverse_config['stop_on_error'] = true;
+        $updated = true;
+      }
+      
+      if ($updated) {
+        $webform->setThirdPartySetting('dataverse_webform', 'dataverse_config', $dataverse_config);
+        $webform->save();
+        $updated_count++;
+      }
+    }
+  }
+  
+  return t('Updated @count webform(s) with new advanced configuration settings.', [
+    '@count' => $updated_count,
+  ]);
+}
+
+/**
+ * Update 8003: Clear cached entity and field metadata.
+ */
+function dataverse_webform_update_8003() {
+  $cache_backend = \Drupal::cache('default');
+  
+  // Clear all Dataverse-related cache entries
+  $cache_tags = ['dataverse_webform:entities', 'dataverse_webform:fields'];
+  foreach ($cache_tags as $tag) {
+    $cache_backend->invalidateTags([$tag]);
+  }
+  
+  // Clear all cache entries with dataverse_webform prefix
+  $cids = [];
+  $result = Database::getConnection()->select('cache_default', 'c')
+    ->fields('c', ['cid'])
+    ->condition('cid', 'dataverse_webform%', 'LIKE')
+    ->execute();
+    
+  while ($row = $result->fetchAssoc()) {
+    $cids[] = $row['cid'];
+  }
+  
+  if (!empty($cids)) {
+    $cache_backend->deleteMultiple($cids);
+  }
+  
+  return t('Cleared @count cached Dataverse metadata entries. Entity and field information will be refreshed on next access.', [
+    '@count' => count($cids),
+  ]);
+}
+
+/**
+ * Update 8004: Validate and repair field mappings.
+ */
+function dataverse_webform_update_8004() {
+  $webforms = \Drupal::entityTypeManager()->getStorage('webform')->loadMultiple();
+  $repaired_count = 0;
+  $issues_found = [];
+  
+  foreach ($webforms as $webform) {
+    $dataverse_config = $webform->getThirdPartySetting('dataverse_webform', 'dataverse_config');
+    
+    if (!empty($dataverse_config) && !empty($dataverse_config['field_mappings'])) {
+      $original_mappings = $dataverse_config['field_mappings'];
+      $repaired_mappings = [];
+      $webform_elements = $webform->getElementsInitializedAndFlattened();
+      
+      foreach ($original_mappings as $mapping) {
+        // Check if webform field still exists
+        if (isset($webform_elements[$mapping['webform_field']])) {
+          // Ensure all required mapping properties exist
+          $repaired_mapping = [
+            'webform_field' => $mapping['webform_field'],
+            'entity' => $mapping['entity'] ?? '',
+            'field' => $mapping['field'] ?? '',
+            'transform' => $mapping['transform'] ?? 'none',
+            'required' => $mapping['required'] ?? false,
+            'relationship_to' => $mapping['relationship_to'] ?? null,
+          ];
+          $repaired_mappings[] = $repaired_mapping;
+        } else {
+          $issues_found[] = "Webform {$webform->id()}: field '{$mapping['webform_field']}' no longer exists";
+        }
+      }
+      
+      if (count($repaired_mappings) !== count($original_mappings)) {
+        $dataverse_config['field_mappings'] = $repaired_mappings;
+        $webform->setThirdPartySetting('dataverse_webform', 'dataverse_config', $dataverse_config);
+        $webform->save();
+        $repaired_count++;
+      }
+    }
+  }
+  
+  $message = t('Validated and repaired field mappings for @count webform(s).', [
+    '@count' => $repaired_count,
+  ]);
+  
+  if (!empty($issues_found)) {
+    $message .= ' ' . t('Issues found: @issues', [
+      '@issues' => implode('; ', $issues_found),
+    ]);
+  }
+  
+  return $message;
+}
+
+/**
+ * Get webforms configured with Dataverse integration.
+ */
+function dataverse_webform_get_configured_webforms() {
+  $webforms = \Drupal::entityTypeManager()->getStorage('webform')->loadMultiple();
+  $configured_webforms = [];
+  
+  foreach ($webforms as $webform) {
+    $dataverse_config = $webform->getThirdPartySetting('dataverse_webform', 'dataverse_config');
+    if (!empty($dataverse_config['enabled'])) {
+      $configured_webforms[$webform->id()] = $webform->label();
+    }
+  }
+  
+  return $configured_webforms;
+}
+
+/**
+ * Check for configuration issues across all webforms.
+ */
+function dataverse_webform_check_configuration_issues() {
+  $issues = [];
+  $webforms = \Drupal::entityTypeManager()->getStorage('webform')->loadMultiple();
+  
+  foreach ($webforms as $webform) {
+    $dataverse_config = $webform->getThirdPartySetting('dataverse_webform', 'dataverse_config');
+    
+    if (!empty($dataverse_config['enabled'])) {
+      // Check for missing required configuration
+      $required_fields = [
+        'azure_tenant_id',
+        'azure_client_id_key',
+        'azure_client_secret_key',
+        'dataverse_url',
+      ];
+      
+      foreach ($required_fields as $field) {
+        if (empty($dataverse_config[$field])) {
+          $issues[] = "Webform {$webform->id()}: missing {$field}";
+        }
+      }
+      
+      // Check if field mappings exist
+      if (empty($dataverse_config['field_mappings'])) {
+        $issues[] = "Webform {$webform->id()}: no field mappings configured";
+      }
+      
+      // Check if Azure keys exist
+      if (!empty($dataverse_config['azure_client_id_key'])) {
+        $key_repository = \Drupal::service('key.repository');
+        $key = $key_repository->getKey($dataverse_config['azure_client_id_key']);
+        if (!$key) {
+          $issues[] = "Webform {$webform->id()}: Azure Client ID key not found";
+        }
+      }
+      
+      if (!empty($dataverse_config['azure_client_secret_key'])) {
+        $key_repository = \Drupal::service('key.repository');
+        $key = $key_repository->getKey($dataverse_config['azure_client_secret_key']);
+        if (!$key) {
+          $issues[] = "Webform {$webform->id()}: Azure Client Secret key not found";
+        }
+      }
+    }
+  }
+  
+  return $issues;
 }

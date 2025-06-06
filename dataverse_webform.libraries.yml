@@ -1,0 +1,12 @@
+admin:
+  version: 2.0.0
+  js:
+    js/dataverse-admin.js: {}
+  css:
+    theme:
+      css/dataverse-admin.css: {}
+  dependencies:
+    - core/jquery
+    - core/drupal
+    - core/drupalSettings
+    - core/jquery.once

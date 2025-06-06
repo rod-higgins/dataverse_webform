@@ -1,44 +1,68 @@
-# Dataverse Webform Integration
+# Dataverse Webform Integration v2.0
 
-A Drupal module that integrates Webform submissions with Microsoft Dataverse via the OData API, featuring secure Azure AD authentication and dynamic field mapping.
+A comprehensive Drupal module that integrates Webform submissions with Microsoft Dataverse via the OData API, featuring **multi-entity mapping support**, secure Azure AD authentication, and advanced data processing capabilities.
+
+## 🆕 What's New in v2.0
+
+- ✨ **Multi-Entity Field Mapping**: Map individual webform fields to different Dataverse entities within the same form
+- 🔧 **Enhanced Configuration Management**: Improved validation and error handling
+- 🚀 **Advanced Data Processing**: Support for data transformations and field validation
+- 📊 **Batch Processing**: Efficient handling of multiple entity creation
+- 🎛️ **Interactive Admin Interface**: Dynamic entity and field loading with AJAX
+- 🔍 **Comprehensive Testing Tools**: Enhanced connection testing and validation
+- 📈 **Performance Optimizations**: Intelligent caching and rate limiting
+- 🛡️ **Enhanced Security**: Improved input validation and error handling
 
 ## Features
 
-- ✅ **Secure OData Integration**: Uses OData query builder to prevent SQL injection attacks
-- ✅ **Azure AD Authentication**: Secure authentication via Azure Active Directory
-- ✅ **Dynamic Entity Discovery**: Automatically discovers available Dataverse entities
-- ✅ **Field Mapping UI**: Visual interface for mapping webform fields to Dataverse fields
+- ✅ **Multi-Entity Mapping**: Map webform fields to different Dataverse entities in a single submission
+- ✅ **Secure OData Integration**: Uses parameterized OData query builder to prevent injection attacks
+- ✅ **Azure AD Authentication**: Secure authentication via Azure Active Directory with token caching
+- ✅ **Dynamic Entity Discovery**: Automatically discovers available Dataverse entities and fields
+- ✅ **Advanced Field Mapping UI**: Visual interface with entity-specific field loading
+- ✅ **Data Transformation**: Built-in transformations for different data types
 - ✅ **Key Module Integration**: Secure credential storage using Drupal's Key module
-- ✅ **Caching**: Intelligent caching of entity and field metadata
-- ✅ **Comprehensive Logging**: Detailed logging for troubleshooting
-- ✅ **Connection Testing**: Built-in tools to test Dataverse connectivity
+- ✅ **Intelligent Caching**: Efficient caching of entity and field metadata
+- ✅ **Comprehensive Logging**: Detailed logging and error reporting
+- ✅ **Batch Processing**: Configurable batch sizes for optimal performance
+- ✅ **Connection Testing**: Advanced tools to test and validate configurations
+- ✅ **Configuration Migration**: Automatic upgrade from v1.x single-entity configurations
 
 ## Requirements
 
-- Drupal 10.4+ or Drupal 11
-- Webform module
-- Key module
-- Microsoft Dataverse instance
-- Azure AD application registration
+- **Drupal**: 10.4+ or Drupal 11
+- **PHP**: 7.4+ (8.0+ recommended)
+- **Required Modules**:
+  - Webform module
+  - Key module
+- **PHP Extensions**:
+  - cURL
+  - JSON
+  - OpenSSL
+- **External Services**:
+  - Microsoft Dataverse instance
+  - Azure AD application registration
 
 ## Installation
 
-1. **Install Dependencies**:
-   ```bash
-   composer require drupal/webform drupal/key
-   drush en webform key
-   ```
+### 1. Install Dependencies
 
-2. **Install Module**:
-   ```bash
-   # Place module files in modules/custom/dataverse_webform/
-   drush en dataverse_webform
-   drush cr
-   ```
+```bash
+composer require drupal/webform drupal/key
+drush en webform key
+```
 
-3. **Set Permissions**:
-   - Navigate to `/admin/people/permissions`
-   - Grant "Administer Dataverse Webform Integration" to appropriate roles
+### 2. Install Module
+
+```bash
+# Place module files in modules/custom/dataverse_webform/
+drush en dataverse_webform
+drush cr
+```
+
+### 3. Set Permissions
+
+Navigate to `/admin/people/permissions` and grant "Administer Dataverse Webform Integration" to appropriate roles.
 
 ## Azure AD Setup
 
@@ -49,7 +73,7 @@ A Drupal module that integrates Webform submissions with Microsoft Dataverse via
 3. Configure:
    - **Name**: "Drupal Dataverse Integration"
    - **Supported account types**: "Accounts in this organizational directory only"
-   - **Redirect URI**: Leave blank for now
+   - **Redirect URI**: Leave blank
 4. Note the **Application (client) ID** and **Directory (tenant) ID**
 
 ### 2. Create Client Secret
@@ -83,101 +107,130 @@ A Drupal module that integrates Webform submissions with Microsoft Dataverse via
    - **Azure Client ID**: Store your Application (client) ID
    - **Azure Client Secret**: Store your client secret value
 
-### 2. Configure Webform Integration
+### 2. Configure Multi-Entity Webform Integration
 
 1. Edit any webform (`/admin/structure/webform`)
 2. Go to "Settings" tab
 3. Find "Dataverse Integration" section
 4. Configure:
-   - ✅ Enable Dataverse integration
-   - **Azure Tenant ID**: Your Directory (tenant) ID
-   - **Azure Client ID Key**: Select the key containing client ID
-   - **Azure Client Secret Key**: Select the key containing client secret
-   - **Dataverse URL**: Your Dataverse environment URL (e.g., `https://yourorg.crm.dynamics.com`)
-   - **Target Entity**: Select from dynamically loaded entities
-   - **Field Mapping**: Map webform fields to Dataverse fields
+
+#### Basic Settings
+- ✅ **Enable Dataverse integration**
+- **Azure Tenant ID**: Your Directory (tenant) ID (GUID format)
+- **Azure Client ID Key**: Select the key containing client ID
+- **Azure Client Secret Key**: Select the key containing client secret
+- **Dataverse URL**: Your Dataverse environment URL
+
+#### Multi-Entity Field Mapping
+- **Test Connection**: Click to load available entities
+- **Field Mappings**: For each webform field:
+  - Select target **Entity** (e.g., contacts, accounts, leads)
+  - Select target **Field** (dynamically loaded based on entity)
+  - Choose **Transform** type (string, number, boolean, date, etc.)
+  - Mark as **Required** if needed
+
+#### Advanced Configuration
+- **Batch Size**: Number of entities to process per batch (1-100)
+- **Retry Attempts**: Number of retry attempts for failed submissions (0-5)
+- **Request Timeout**: Maximum time to wait for API responses (5-300 seconds)
+- **Stop on Error**: Whether to stop processing if one entity creation fails
 
 ### 3. Test Configuration
 
 1. Go to `/admin/config/services/dataverse/test`
 2. Enter your configuration details
-3. Click "Test Connection" to verify Azure AD authentication
-4. Click "Test Entity Retrieval" to verify entity access
+3. Run comprehensive tests:
+   - **Test Connection**: Verify Azure AD authentication
+   - **Test Entity Retrieval**: Verify entity access
+   - **Test Field Retrieval**: Verify field metadata access
+   - **Test Multi-Entity Operations**: Validate multi-entity field mappings
+   - **Validate Configuration**: Complete configuration validation
 
-## Usage
+## Usage Examples
 
-Once configured, webform submissions will automatically:
+### Example 1: Contact and Account Creation
 
-1. **Authenticate** with Azure AD using stored credentials
-2. **Map** webform data to Dataverse fields per your configuration
-3. **Create** new records in the specified Dataverse entity
-4. **Log** success/failure for monitoring
+A webform that creates both a contact and related account:
 
-## Field Mapping
+```yaml
+Field Mappings:
+- first_name → contacts.firstname (string)
+- last_name → contacts.lastname (string)
+- email → contacts.emailaddress1 (email)
+- company_name → accounts.name (string)
+- company_website → accounts.websiteurl (url)
 
-The module supports mapping between:
+Submission Order:
+1. accounts (create company first)
+2. contacts (create contact, can reference account)
+```
 
-| Webform Field Type | Dataverse Field Type | Notes |
-|-------------------|---------------------|-------|
-| Text | Single Line of Text | Direct mapping |
-| Textarea | Multiple Lines of Text | Direct mapping |
-| Number | Whole Number, Decimal | Numeric validation |
-| Email | Email | Email format validation |
-| Select | Choice, Yes/No | Option mapping |
-| Checkboxes | Multi-Select Choice | Semicolon-separated values |
-| Date | Date Only, Date and Time | ISO format conversion |
+### Example 2: Lead with Custom Transformations
 
-## Security Features
+A lead generation form with data transformations:
 
-### OData Query Protection
-- All queries use parameterized OData query builder
-- Input sanitization prevents injection attacks
-- Identifier validation with whitelist approach
+```yaml
+Field Mappings:
+- full_name → leads.fullname (string)
+- contact_email → leads.emailaddress1 (email)
+- phone_number → leads.telephone1 (phone)
+- interested_in → leads.description (json)
+- budget_range → leads.budgetamount (number)
+- contact_me → leads.donotbulkemail (boolean, inverted)
+```
 
-### Credential Security
-- Azure credentials stored in Key module
-- No plaintext secrets in configuration
-- Token caching with secure expiration
+### Example 3: Multi-Entity Customer Onboarding
 
-### Access Control
-- Permission-based access to configuration
-- Entity-level security via Dataverse roles
-- Audit logging for all operations
+Complex form creating account, contact, and opportunity:
 
-## Troubleshooting
+```yaml
+Field Mappings:
+- company_name → accounts.name (string)
+- company_industry → accounts.industrycode (string)
+- contact_first_name → contacts.firstname (string)
+- contact_last_name → contacts.lastname (string)
+- contact_email → contacts.emailaddress1 (email)
+- opportunity_title → opportunities.name (string)
+- estimated_value → opportunities.estimatedvalue (number)
+- close_date → opportunities.estimatedclosedate (date)
 
-### Common Issues
+Submission Order:
+1. accounts
+2. contacts
+3. opportunities
+```
 
-**Connection Failed**
-- Verify Azure AD app permissions
-- Check Dataverse application user setup
-- Validate tenant ID and client credentials
+## Multi-Entity Field Mapping
 
-**No Entities Loaded**
-- Ensure application user has read permissions
-- Check Dataverse security roles
-- Verify environment URL format
+### Supported Data Transformations
 
-**Field Mapping Not Working**
-- Confirm target entity permissions
-- Check field-level security
-- Validate field types compatibility
+| Transform Type | Description | Example |
+|---------------|-------------|---------|
+| `none` | No transformation | Direct value mapping |
+| `string` | Convert to string | Arrays joined with "; " |
+| `number` | Convert to number | "100.50" → 100.5 |
+| `boolean` | Convert to boolean | "yes" → true, "no" → false |
+| `date` | Convert to ISO date | "2024-01-15" → "2024-01-15T00:00:00Z" |
+| `email` | Validate and format email | Convert to lowercase |
+| `phone` | Format phone number | Remove non-numeric chars |
+| `url` | Validate and format URL | Add http:// if missing |
+| `json` | Convert to JSON string | Array/object → JSON |
 
-### Debug Logging
+### Entity Relationship Handling
 
-Check logs at `/admin/reports/dblog` for:
-- `dataverse_webform` entries
-- Authentication failures
-- Entity/field discovery issues
-- Submission errors
+The module supports creating related entities in a specific order:
 
-### Test Tools
+1. **Parent entities** created first (e.g., accounts)
+2. **Child entities** created with references (e.g., contacts)
+3. **Dependent entities** created last (e.g., opportunities)
 
-Use built-in test form at `/admin/config/services/dataverse/test`:
-- Test Azure AD authentication
-- Verify entity discovery
-- Validate field retrieval
-- Check API connectivity
+### Field Mapping Best Practices
+
+1. **Map Required Fields First**: Ensure all required Dataverse fields are mapped
+2. **Use Appropriate Transformations**: Match data types between webform and Dataverse
+3. **Test Field Mappings**: Use the validation tools to verify mappings
+4. **Consider Field Length Limits**: Dataverse fields have maximum length constraints
+5. **Handle Multi-Value Fields**: Arrays are automatically joined with semicolons
 
 ## API Reference
 
@@ -190,13 +243,29 @@ $config = [
   'azure_client_id_key' => 'client_id_key',
   'azure_client_secret_key' => 'client_secret_key',
   'dataverse_url' => 'https://yourorg.crm.dynamics.com',
-  'target_entity' => 'contacts',
-  'field_mapping' => [
-    'webform_field' => 'dataverse_field',
-    'first_name' => 'firstname',
-    'last_name' => 'lastname',
-    'email' => 'emailaddress1',
+  'field_mappings' => [
+    [
+      'webform_field' => 'first_name',
+      'entity' => 'contacts',
+      'field' => 'firstname',
+      'transform' => 'string',
+      'required' => false,
+      'relationship_to' => null,
+    ],
+    [
+      'webform_field' => 'company_name',
+      'entity' => 'accounts',
+      'field' => 'name',
+      'transform' => 'string',
+      'required' => true,
+      'relationship_to' => null,
+    ],
   ],
+  'submission_order' => ['accounts', 'contacts'],
+  'batch_size' => 10,
+  'retry_attempts' => 3,
+  'timeout' => 30,
+  'stop_on_error' => true,
 ];
 ```
 
@@ -209,24 +278,242 @@ $client = \Drupal::service('dataverse_webform.dataverse_client');
 // Test connection
 $connected = $client->testConnection($config);
 
-// Get entities
+// Get available entities
 $entities = $client->getEntities($config);
 
-// Get entity fields
+// Get fields for specific entity
 $fields = $client->getEntityFields($config, 'contacts');
 
-// Submit to Dataverse (automatic via hook)
-$client->submitToDataverse($submission, $config);
+// Submit to multiple entities (automatic via hook)
+$results = $client->submitToDataverse($submission, $config);
+
+// Validate field mappings
+$validation = $client->validateFieldMappings($config, $field_mappings);
+
+// Create single entity
+$result = $client->createEntity($config, 'contacts', $data);
+
+// Batch create multiple entities
+$results = $client->batchCreateEntities($config, $entities_data);
 ```
 
-## Support
+### Configuration Manager
 
-For issues and feature requests:
-1. Check troubleshooting section above
-2. Review logs for specific error messages
-3. Verify Azure AD and Dataverse configuration
-4. Test connection using built-in test tools
+```php
+// Get configuration manager
+$config_manager = \Drupal::service('dataverse_webform.config_manager');
+
+// Get Azure credential keys
+$keys = $config_manager->getAzureCredentialKeys();
+
+// Validate configuration
+$validation = $config_manager->validateConfiguration($config);
+
+// Convert legacy configuration
+$new_config = $config_manager->convertLegacyConfiguration($old_config);
+
+// Get entities from mappings
+$entities = $config_manager->getEntitiesFromMappings($field_mappings);
+```
+
+## Security Features
+
+### Enhanced Input Validation
+- GUID format validation for Azure Tenant ID
+- URL validation with HTTPS requirement
+- Entity and field name sanitization
+- Data type validation and transformation
+
+### OData Query Protection
+- Parameterized queries prevent injection attacks
+- Identifier validation with whitelist approach
+- Value sanitization and length limits
+- Operator validation against allowed list
+
+### Credential Security
+- Azure credentials stored in Key module only
+- No plaintext secrets in configuration
+- Secure token caching with automatic expiration
+- Token invalidation on configuration changes
+
+### Access Control
+- Permission-based access to configuration
+- Entity-level security via Dataverse roles
+- Field-level security enforcement
+- Comprehensive audit logging
+
+## Performance Optimization
+
+### Caching Strategy
+- **Entity Metadata**: Cached for 1 hour
+- **Field Metadata**: Cached per entity for 1 hour
+- **Access Tokens**: Cached with 60-second safety buffer
+- **Configuration Validation**: Cached during form building
+
+### Batch Processing
+- Configurable batch sizes (1-100 entities)
+- Automatic rate limiting between batches
+- Progress tracking for large submissions
+- Error handling per entity in batch
+
+### API Rate Limiting
+- Built-in delays between batch requests
+- Exponential backoff for failed requests
+- Configurable retry attempts
+- Rate limit detection and handling
+
+## Troubleshooting
+
+### Common Issues
+
+#### Connection Failed
+- Verify Azure AD app permissions are granted
+- Check Dataverse application user setup and security roles
+- Validate tenant ID format (must be GUID)
+- Ensure client credentials are correctly stored in keys
+
+#### No Entities Loaded
+- Confirm application user has read permissions on metadata
+- Check Dataverse security roles include entity access
+- Verify environment URL format and accessibility
+- Test connection using the built-in test tools
+
+#### Field Mapping Errors
+- Ensure target entity permissions allow record creation
+- Verify field-level security settings in Dataverse
+- Check field types compatibility between webform and Dataverse
+- Validate required field mappings are complete
+
+#### Multi-Entity Submission Failures
+- Check entity submission order for dependencies
+- Verify all mapped entities have create permissions
+- Review batch size settings for large forms
+- Check timeout settings for complex operations
+
+### Debug Information
+
+#### Log Locations
+- **Drupal Logs**: `/admin/reports/dblog` (filter by 'dataverse_webform')
+- **Authentication Logs**: Check for Azure AD token acquisition issues
+- **API Logs**: Review HTTP request/response errors
+- **Validation Logs**: Field mapping and configuration validation
+
+#### Test Tools Usage
+1. **Connection Test**: Validates Azure AD authentication and API access
+2. **Entity Test**: Verifies entity metadata retrieval
+3. **Field Test**: Checks field metadata for multiple entities
+4. **Multi-Entity Test**: Validates complete field mapping configuration
+5. **Configuration Validation**: Comprehensive configuration check
+
+#### Debugging Steps
+1. Use built-in test form at `/admin/config/services/dataverse/test`
+2. Check Recent Log Messages for specific error details
+3. Verify Azure AD app registration and permissions
+4. Test API connectivity using external tools
+5. Validate Dataverse user permissions and security roles
+
+## Migration from v1.x
+
+### Automatic Configuration Upgrade
+
+The module automatically detects and upgrades v1.x configurations:
+
+```php
+// Old v1.x format (single entity)
+$old_config = [
+  'target_entity' => 'contacts',
+  'field_mapping' => [
+    'first_name' => 'firstname',
+    'last_name' => 'lastname',
+  ],
+];
+
+// Automatically converted to v2.x format (multi-entity)
+$new_config = [
+  'field_mappings' => [
+    [
+      'webform_field' => 'first_name',
+      'entity' => 'contacts',
+      'field' => 'firstname',
+      'transform' => 'none',
+      'required' => false,
+    ],
+    [
+      'webform_field' => 'last_name',
+      'entity' => 'contacts',
+      'field' => 'lastname',
+      'transform' => 'none',
+      'required' => false,
+    ],
+  ],
+  'submission_order' => ['contacts'],
+];
+```
+
+### Manual Migration Steps
+
+1. **Backup Configurations**: Export existing webform configurations
+2. **Update Module**: Install v2.0 (automatic upgrade runs)
+3. **Review Mappings**: Check converted field mappings
+4. **Test Functionality**: Use test tools to verify operation
+5. **Enhance Mappings**: Add multi-entity mappings as needed
+
+## Support and Contributing
+
+### Getting Help
+
+1. **Documentation**: Review this README and inline help text
+2. **Test Tools**: Use built-in testing and validation tools
+3. **Logs**: Check Drupal logs for detailed error information
+4. **Community**: Post issues with detailed error messages and configuration
+
+### Reporting Issues
+
+When reporting issues, please include:
+- Drupal and module versions
+- PHP version and extensions
+- Azure AD configuration details (no secrets)
+- Dataverse environment information
+- Complete error messages from logs
+- Steps to reproduce the issue
+
+### Development
+
+#### Code Standards
+- Follow Drupal coding standards
+- Use PHP type hints throughout
+- Implement comprehensive error handling
+- Include unit tests for new features
+- Document all public methods
+
+#### Testing
+- Use the built-in test form for integration testing
+- Test with various field types and transformations
+- Verify multi-entity scenarios
+- Test error conditions and edge cases
 
 ## License
 
 GPL-2.0-or-later
+
+---
+
+## Changelog
+
+### v2.0.0
+- **NEW**: Multi-entity field mapping support
+- **NEW**: Advanced data transformation capabilities
+- **NEW**: Enhanced admin interface with AJAX
+- **NEW**: Comprehensive testing and validation tools
+- **NEW**: Batch processing and performance optimizations
+- **NEW**: Automatic migration from v1.x configurations
+- **IMPROVED**: Security with enhanced input validation
+- **IMPROVED**: Error handling and logging
+- **IMPROVED**: Configuration management and validation
+- **IMPROVED**: Documentation and examples
+
+### v1.0.0
+- Initial release with single-entity mapping
+- Basic Azure AD authentication
+- Simple field mapping interface
+- Core Dataverse integration
