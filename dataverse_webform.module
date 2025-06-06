@@ -12,16 +12,32 @@ use Drupal\webform\WebformSubmissionInterface;
  * Implements hook_webform_submission_insert().
  */
 function dataverse_webform_webform_submission_insert(WebformSubmissionInterface $webform_submission) {
-  $handler = \Drupal::service('dataverse_webform.submission_handler');
-  $handler->processSubmission($webform_submission);
+  try {
+    $handler = \Drupal::service('dataverse_webform.submission_handler');
+    $handler->processSubmission($webform_submission);
+  } catch (\Exception $e) {
+    \Drupal::logger('dataverse_webform')->error(
+      'Failed to process webform submission @submission_id: @error',
+      ['@submission_id' => $webform_submission->id(), '@error' => $e->getMessage()]
+    );
+  }
 }
 
 /**
  * Implements hook_form_FORM_ID_alter() for webform admin form.
  */
 function dataverse_webform_form_webform_admin_form_alter(&$form, FormStateInterface $form_state, $form_id) {
-  $form_builder = \Drupal::service('dataverse_webform.form_builder');
-  $form_builder->buildWebformSettingsForm($form, $form_state);
+  try {
+    $form_builder = \Drupal::service('dataverse_webform.form_builder');
+    $form_builder->buildWebformSettingsForm($form, $form_state);
+  } catch (\Exception $e) {
+    \Drupal::logger('dataverse_webform')->error(
+      'Failed to build Dataverse settings form: @error',
+      ['@error' => $e->getMessage()]
+    );
+    
+    \Drupal::messenger()->addError(t('Unable to load Dataverse integration settings. Please check the module configuration.'));
+  }
 }
 
 /**
@@ -44,7 +60,29 @@ function dataverse_webform_theme() {
  */
 function dataverse_webform_help($route_name, \Drupal\Core\Routing\RouteMatchInterface $route_match) {
   if ($route_name === 'help.page.dataverse_webform') {
-    return '<p>' . t('The Dataverse Webform Integration module allows you to automatically submit webform data to Microsoft Dataverse.') . '</p>';
+    $output = '<h3>' . t('About') . '</h3>';
+    $output .= '<p>' . t('The Dataverse Webform Integration module allows you to automatically submit webform data to Microsoft Dataverse with support for multi-entity mapping.') . '</p>';
+    
+    $output .= '<h3>' . t('Features') . '</h3>';
+    $output .= '<ul>';
+    $output .= '<li>' . t('Multi-entity mapping support') . '</li>';
+    $output .= '<li>' . t('Secure Azure AD authentication') . '</li>';
+    $output .= '<li>' . t('Field transformation and validation') . '</li>';
+    $output .= '<li>' . t('Queue-based processing for complex submissions') . '</li>';
+    $output .= '<li>' . t('Comprehensive error handling and logging') . '</li>';
+    $output .= '</ul>';
+    
+    $output .= '<h3>' . t('Configuration') . '</h3>';
+    $output .= '<p>' . t('Configure Azure AD credentials using the <a href=":key_url">Key module</a> and then enable Dataverse integration on individual webforms.', [
+      ':key_url' => \Drupal::url('entity.key.collection'),
+    ]) . '</p>';
+    
+    $output .= '<p>' . t('Use the <a href=":test_url">connection test tool</a> to verify your configuration.', [
+      ':test_url' => \Drupal::url('dataverse_webform.test'),
+    ]) . '</p>';
+    
+    return $output;
   }
+  
   return '';
 }

@@ -90,13 +90,15 @@ class AzureAdAuthService {
     $cache_key = $this->buildCacheKey($config);
     $cached_data = $this->state->get($cache_key);
 
-    if ($cached_data && is_array($cached_data)) {
-      $expires = $cached_data['expires'] ?? 0;
-      $token = $cached_data['token'] ?? '';
-      
-      if (!empty($token) && $expires > time()) {
-        return $token;
-      }
+    if (!is_array($cached_data)) {
+      return null;
+    }
+
+    $expires = $cached_data['expires'] ?? 0;
+    $token = $cached_data['token'] ?? '';
+    
+    if (!empty($token) && $expires > time()) {
+      return $token;
     }
 
     return null;
@@ -108,6 +110,7 @@ class AzureAdAuthService {
     
     if ($this->lock->acquire($lock_key, self::LOCK_TIMEOUT)) {
       try {
+        // Check again in case another process refreshed it
         $cached_token = $this->getCachedToken($config);
         if ($cached_token) {
           return $cached_token;
@@ -119,12 +122,14 @@ class AzureAdAuthService {
       }
     }
     
-    usleep(500000); // Wait 500ms for other process
+    // Wait for other process and check again
+    usleep(500000); // Wait 500ms
     $cached_token = $this->getCachedToken($config);
     if ($cached_token) {
       return $cached_token;
     }
     
+    // Fallback to direct refresh
     return $this->refreshAccessToken($config);
   }
 
@@ -132,43 +137,61 @@ class AzureAdAuthService {
     $credentials = $this->getAzureCredentials($config);
     
     try {
-      $client = $this->httpClientFactory->fromOptions(['timeout' => 30]);
-      $oauth_url = sprintf(self::OAUTH_ENDPOINT_TEMPLATE, $credentials['tenant_id']);
-      
-      $response = $client->post($oauth_url, [
-        'form_params' => [
-          'client_id' => $credentials['client_id'],
-          'client_secret' => $credentials['client_secret'],
-          'scope' => $config['dataverse_url'] . '/.default',
-          'grant_type' => 'client_credentials',
-        ],
-        'headers' => ['Content-Type' => 'application/x-www-form-urlencoded'],
-      ]);
-
+      $response = $this->makeTokenRequest($config, $credentials);
       $body = $this->parseTokenResponse($response);
       
       if (isset($body['access_token'])) {
+        $token = $body['access_token'];
         $expires_in = min((int) ($body['expires_in'] ?? 3600), self::MAX_TOKEN_LIFETIME);
-        $this->cacheToken($config, $body['access_token'], $expires_in);
         
-        $this->loggerFactory->get('dataverse_webform')->info(
-          'Successfully obtained Azure AD access token, expires in @expires seconds',
-          ['@expires' => $expires_in]
-        );
+        $this->cacheToken($config, $token, $expires_in);
+        $this->logSuccessfulTokenRefresh($expires_in);
         
-        return $body['access_token'];
+        return $token;
       }
 
-      $error = $body['error'] ?? 'unknown_error';
-      $error_description = $body['error_description'] ?? 'No error description provided';
+      $this->handleTokenError($body);
       
-      throw new DataverseException("Azure AD authentication failed: {$error} - {$error_description}");
-
     } catch (RequestException $e) {
-      $error_message = 'Azure AD authentication request failed: ' . $e->getMessage();
-      $this->loggerFactory->get('dataverse_webform')->error($error_message);
-      throw new DataverseException($error_message, 0, $e);
+      $this->handleRequestException($e);
     }
+
+    return null;
+  }
+
+  protected function makeTokenRequest(array $config, array $credentials): \Psr\Http\Message\ResponseInterface {
+    $client = $this->httpClientFactory->fromOptions(['timeout' => 30]);
+    $oauth_url = sprintf(self::OAUTH_ENDPOINT_TEMPLATE, $credentials['tenant_id']);
+    
+    return $client->post($oauth_url, [
+      'form_params' => [
+        'client_id' => $credentials['client_id'],
+        'client_secret' => $credentials['client_secret'],
+        'scope' => $config['dataverse_url'] . '/.default',
+        'grant_type' => 'client_credentials',
+      ],
+      'headers' => ['Content-Type' => 'application/x-www-form-urlencoded'],
+    ]);
+  }
+
+  protected function handleTokenError(array $body): void {
+    $error = $body['error'] ?? 'unknown_error';
+    $error_description = $body['error_description'] ?? 'No error description provided';
+    
+    throw new DataverseException("Azure AD authentication failed: {$error} - {$error_description}");
+  }
+
+  protected function handleRequestException(RequestException $e): void {
+    $error_message = 'Azure AD authentication request failed: ' . $e->getMessage();
+    $this->loggerFactory->get('dataverse_webform')->error($error_message);
+    throw new DataverseException($error_message, 0, $e);
+  }
+
+  protected function logSuccessfulTokenRefresh(int $expires_in): void {
+    $this->loggerFactory->get('dataverse_webform')->info(
+      'Successfully obtained Azure AD access token, expires in @expires seconds',
+      ['@expires' => $expires_in]
+    );
   }
 
   protected function getAzureCredentials(array $config): array {
@@ -244,6 +267,12 @@ class AzureAdAuthService {
   }
 
   protected function validateAuthConfig(array $config): void {
+    $this->validateRequiredFields($config);
+    $this->validateTenantIdFormat($config['azure_tenant_id']);
+    $this->validateDataverseUrl($config['dataverse_url']);
+  }
+
+  protected function validateRequiredFields(array $config): void {
     $required_fields = ['azure_tenant_id', 'azure_client_id_key', 'azure_client_secret_key', 'dataverse_url'];
 
     foreach ($required_fields as $field) {
@@ -251,13 +280,15 @@ class AzureAdAuthService {
         throw new DataverseException("Missing required Azure AD configuration: {$field}");
       }
     }
+  }
 
-    $tenant_id = $config['azure_tenant_id'];
+  protected function validateTenantIdFormat(string $tenant_id): void {
     if (!preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $tenant_id)) {
       throw new DataverseException('Azure Tenant ID must be a valid GUID format');
     }
+  }
 
-    $dataverse_url = $config['dataverse_url'];
+  protected function validateDataverseUrl(string $dataverse_url): void {
     if (!filter_var($dataverse_url, FILTER_VALIDATE_URL) || strpos($dataverse_url, 'https://') !== 0) {
       throw new DataverseException('Dataverse URL must be a valid HTTPS URL');
     }

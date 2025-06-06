@@ -36,6 +36,8 @@ function dataverse_webform_install() {
     'cache_entity_metadata_hours' => 1,
     'rate_limit_requests_per_hour' => 100,
     'rate_limit_enabled' => true,
+    'cache_tags_enabled' => true,
+    'force_queue_processing' => false,
   ])->save();
   
   \Drupal::messenger()->addStatus(t('Dataverse Webform Integration module installed successfully. Configure your Azure AD credentials using the <a href="@url">Key module</a>.', [
@@ -55,132 +57,7 @@ function dataverse_webform_uninstall() {
   \Drupal::messenger()->addStatus(t('Dataverse Webform Integration module uninstalled. All configuration and cached data removed.'));
 }
 
-/**
- * Update 8001: Convert legacy configurations to multi-entity format.
- */
-function dataverse_webform_update_8001() {
-  $config_manager = \Drupal::service('dataverse_webform.config_manager');
-  $webforms = \Drupal::entityTypeManager()->getStorage('webform')->loadMultiple();
-  $converted_count = 0;
-  
-  foreach ($webforms as $webform) {
-    $dataverse_config = $webform->getThirdPartySetting('dataverse_webform', 'dataverse_config');
-    
-    if (dataverse_webform_is_legacy_config($dataverse_config)) {
-      $new_config = $config_manager->convertLegacyConfiguration($dataverse_config);
-      $webform->setThirdPartySetting('dataverse_webform', 'dataverse_config', $new_config);
-      $webform->save();
-      $converted_count++;
-    }
-  }
-  
-  return t('Converted @count webform(s) from legacy configuration format.', ['@count' => $converted_count]);
-}
 
-/**
- * Update 8002: Add default advanced configuration settings.
- */
-function dataverse_webform_update_8002() {
-  $webforms = \Drupal::entityTypeManager()->getStorage('webform')->loadMultiple();
-  $updated_count = 0;
-  
-  foreach ($webforms as $webform) {
-    $dataverse_config = $webform->getThirdPartySetting('dataverse_webform', 'dataverse_config');
-    
-    if (!empty($dataverse_config['enabled'])) {
-      $defaults = [
-        'batch_size' => 10,
-        'retry_attempts' => 3,
-        'timeout' => 30,
-        'stop_on_error' => true,
-      ];
-      
-      $updated = false;
-      foreach ($defaults as $key => $default_value) {
-        if (!isset($dataverse_config[$key])) {
-          $dataverse_config[$key] = $default_value;
-          $updated = true;
-        }
-      }
-      
-      if ($updated) {
-        $webform->setThirdPartySetting('dataverse_webform', 'dataverse_config', $dataverse_config);
-        $webform->save();
-        $updated_count++;
-      }
-    }
-  }
-  
-  return t('Updated @count webform(s) with advanced configuration settings.', ['@count' => $updated_count]);
-}
-
-/**
- * Update 8003: Clear cached metadata.
- */
-function dataverse_webform_update_8003() {
-  \Drupal::cache('default')->invalidateAll();
-  \Drupal::service('cache_tags.invalidator')->invalidateTags(['dataverse_webform']);
-  
-  return t('Cleared cached Dataverse metadata entries.');
-}
-
-/**
- * Update 8004: Validate and repair field mappings.
- */
-function dataverse_webform_update_8004() {
-  $webforms = \Drupal::entityTypeManager()->getStorage('webform')->loadMultiple();
-  $repaired_count = 0;
-  $issues = [];
-  
-  foreach ($webforms as $webform) {
-    $dataverse_config = $webform->getThirdPartySetting('dataverse_webform', 'dataverse_config');
-    
-    if (!empty($dataverse_config['field_mappings'])) {
-      $webform_elements = $webform->getElementsInitializedAndFlattened();
-      $original_count = count($dataverse_config['field_mappings']);
-      
-      $dataverse_config['field_mappings'] = array_filter(
-        $dataverse_config['field_mappings'],
-        function($mapping) use ($webform_elements, &$issues, $webform) {
-          if (!isset($webform_elements[$mapping['webform_field']])) {
-            $issues[] = "Webform {$webform->id()}: field '{$mapping['webform_field']}' no longer exists";
-            return false;
-          }
-          return true;
-        }
-      );
-      
-      if (count($dataverse_config['field_mappings']) !== $original_count) {
-        $webform->setThirdPartySetting('dataverse_webform', 'dataverse_config', $dataverse_config);
-        $webform->save();
-        $repaired_count++;
-      }
-    }
-  }
-  
-  $message = t('Validated and repaired field mappings for @count webform(s).', ['@count' => $repaired_count]);
-  if (!empty($issues)) {
-    $message .= ' Issues found: ' . implode('; ', $issues);
-  }
-  
-  return $message;
-}
-
-/**
- * Update 8005: Initialize performance improvements.
- */
-function dataverse_webform_update_8005() {
-  $config = \Drupal::configFactory()->getEditable('dataverse_webform.settings');
-  $config->setMultiple([
-    'rate_limit_requests_per_hour' => 100,
-    'rate_limit_enabled' => true,
-    'cache_tags_enabled' => true,
-  ])->save();
-  
-  \Drupal::cache('default')->invalidateTags(['dataverse_webform']);
-  
-  return t('Initialized rate limiting and performance improvements.');
-}
 
 /**
  * Check module dependencies.
@@ -316,6 +193,7 @@ function dataverse_webform_validate_webform_config($webform, array $config): arr
   $issues = [];
   $webform_id = $webform->id();
   
+  // Check required fields
   $required_fields = ['azure_tenant_id', 'azure_client_id_key', 'azure_client_secret_key', 'dataverse_url'];
   foreach ($required_fields as $field) {
     if (empty($config[$field])) {
@@ -323,10 +201,12 @@ function dataverse_webform_validate_webform_config($webform, array $config): arr
     }
   }
   
+  // Check field mappings
   if (empty($config['field_mappings'])) {
     $issues[] = "Webform {$webform_id}: no field mappings configured";
   }
   
+  // Validate keys
   $key_repository = \Drupal::service('key.repository');
   foreach (['azure_client_id_key', 'azure_client_secret_key'] as $key_field) {
     if (!empty($config[$key_field]) && !$key_repository->getKey($config[$key_field])) {
@@ -337,14 +217,7 @@ function dataverse_webform_validate_webform_config($webform, array $config): arr
   return $issues;
 }
 
-/**
- * Check if configuration is legacy format.
- */
-function dataverse_webform_is_legacy_config(array $config): bool {
-  return !empty($config['target_entity']) && 
-         !empty($config['field_mapping']) && 
-         empty($config['field_mappings']);
-}
+
 
 /**
  * Clean webform third-party settings.
@@ -364,13 +237,27 @@ function dataverse_webform_clean_webform_settings(): void {
  * Clean cache and state entries.
  */
 function dataverse_webform_clean_cache_and_state(): void {
+  // Clear caches
   \Drupal::cache('default')->invalidateTags(['dataverse_webform']);
   
+  // Clear state entries
   $state = \Drupal::state();
-  $state_keys = $state->getMultiple([]);
-  foreach ($state_keys as $key => $value) {
-    if (strpos($key, 'dataverse_webform.') === 0) {
-      $state->delete($key);
-    }
+  $keys_to_delete = [];
+  
+  // Get all state keys that start with our prefix
+  $connection = \Drupal::database();
+  $result = $connection->select('key_value', 'kv')
+    ->fields('kv', ['name'])
+    ->condition('collection', 'state')
+    ->condition('name', 'dataverse_webform%', 'LIKE')
+    ->execute();
+  
+  foreach ($result as $row) {
+    $keys_to_delete[] = $row->name;
+  }
+  
+  // Delete state entries
+  foreach ($keys_to_delete as $key) {
+    $state->delete($key);
   }
 }

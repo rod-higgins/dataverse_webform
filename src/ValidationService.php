@@ -80,7 +80,12 @@ class ValidationService {
   protected function validateRequiredFields(array $config): void {
     $required_fields = ['azure_tenant_id', 'azure_client_id_key', 'azure_client_secret_key', 'dataverse_url'];
 
-    $missing_fields = array_filter($required_fields, fn($field) => empty($config[$field]));
+    $missing_fields = [];
+    foreach ($required_fields as $field) {
+      if (empty($config[$field])) {
+        $missing_fields[] = $field;
+      }
+    }
     
     if (!empty($missing_fields)) {
       throw new DataverseException('Missing required configuration: ' . implode(', ', $missing_fields));
@@ -88,12 +93,18 @@ class ValidationService {
   }
 
   protected function validateFieldFormats(array $config): void {
-    if (!preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $config['azure_tenant_id'])) {
+    $this->validateAzureTenantId($config['azure_tenant_id']);
+    $this->validateDataverseUrl($config['dataverse_url']);
+  }
+
+  protected function validateAzureTenantId(string $tenant_id): void {
+    if (!preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $tenant_id)) {
       throw new DataverseException('Azure Tenant ID must be a valid GUID format');
     }
+  }
 
-    $dataverse_url = $config['dataverse_url'];
-    if (!filter_var($dataverse_url, FILTER_VALIDATE_URL) || strpos($dataverse_url, 'https://') !== 0) {
+  protected function validateDataverseUrl(string $url): void {
+    if (!filter_var($url, FILTER_VALIDATE_URL) || strpos($url, 'https://') !== 0) {
       throw new DataverseException('Dataverse URL must be a valid HTTPS URL');
     }
   }
@@ -107,11 +118,14 @@ class ValidationService {
 
     foreach ($numeric_settings as $field => [$min, $max]) {
       if (isset($config[$field])) {
-        $value = (int) $config[$field];
-        if ($value < $min || $value > $max) {
-          throw new DataverseException("{$field} must be between {$min} and {$max}");
-        }
+        $this->validateNumericRange($field, (int) $config[$field], $min, $max);
       }
+    }
+  }
+
+  protected function validateNumericRange(string $field, int $value, int $min, int $max): void {
+    if ($value < $min || $value > $max) {
+      throw new DataverseException("{$field} must be between {$min} and {$max}");
     }
   }
 
@@ -137,21 +151,31 @@ class ValidationService {
         $this->validateTransform($mapping['transform']);
       }
 
-      if (!empty($mapping['relationship_to']) && !in_array($mapping['relationship_to'], $entities_used)) {
-        $this->loggerFactory->get('dataverse_webform')->warning(
-          'Field mapping for @field references relationship_to @entity which is not mapped by any previous field',
-          ['@field' => $webform_field, '@entity' => $mapping['relationship_to']]
-        );
-      }
+      $this->validateRelationship($webform_field, $mapping, $entities_used);
     }
   }
 
   protected function validateMappingStructure(string $webform_field, array $mapping): void {
     $required_fields = ['entity', 'field'];
-    $missing_fields = array_filter($required_fields, fn($field) => empty($mapping[$field]));
+    $missing_fields = [];
+    
+    foreach ($required_fields as $field) {
+      if (empty($mapping[$field])) {
+        $missing_fields[] = $field;
+      }
+    }
     
     if (!empty($missing_fields)) {
       throw new DataverseException("Missing '" . implode(', ', $missing_fields) . "' in mapping for webform field '{$webform_field}'");
+    }
+  }
+
+  protected function validateRelationship(string $webform_field, array $mapping, array $entities_used): void {
+    if (!empty($mapping['relationship_to']) && !in_array($mapping['relationship_to'], $entities_used)) {
+      $this->loggerFactory->get('dataverse_webform')->warning(
+        'Field mapping for @field references relationship_to @entity which is not mapped by any previous field',
+        ['@field' => $webform_field, '@entity' => $mapping['relationship_to']]
+      );
     }
   }
 
@@ -160,13 +184,7 @@ class ValidationService {
       return;
     }
 
-    $entities_in_mappings = [];
-    foreach ($field_mappings as $mapping) {
-      if (!empty($mapping['entity'])) {
-        $entities_in_mappings[] = $mapping['entity'];
-      }
-    }
-    $entities_in_mappings = array_unique($entities_in_mappings);
+    $entities_in_mappings = $this->extractEntitiesFromMappings($field_mappings);
 
     foreach ($submission_order as $entity_name) {
       $this->validateEntityName($entity_name);
@@ -176,6 +194,20 @@ class ValidationService {
       }
     }
 
+    $this->checkMissingEntitiesInOrder($entities_in_mappings, $submission_order);
+  }
+
+  protected function extractEntitiesFromMappings(array $field_mappings): array {
+    $entities = [];
+    foreach ($field_mappings as $mapping) {
+      if (!empty($mapping['entity'])) {
+        $entities[] = $mapping['entity'];
+      }
+    }
+    return array_unique($entities);
+  }
+
+  protected function checkMissingEntitiesInOrder(array $entities_in_mappings, array $submission_order): void {
     $missing_entities = array_diff($entities_in_mappings, $submission_order);
     if (!empty($missing_entities)) {
       $this->loggerFactory->get('dataverse_webform')->warning(
@@ -191,19 +223,21 @@ class ValidationService {
     }
 
     if (is_string($value)) {
-      if (strlen($value) > self::MAX_STRING_LENGTH) {
-        throw new DataverseException("Value for field '{$field_name}' exceeds maximum length of " . self::MAX_STRING_LENGTH . " characters");
-      }
-
-      if (preg_match('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', $value)) {
-        throw new DataverseException("Value for field '{$field_name}' contains invalid control characters");
-      }
-    }
-
-    if (is_array($value)) {
+      $this->validateStringValue($field_name, $value);
+    } elseif (is_array($value)) {
       foreach ($value as $item) {
         $this->validateFieldValue($field_name, $item);
       }
+    }
+  }
+
+  protected function validateStringValue(string $field_name, string $value): void {
+    if (strlen($value) > self::MAX_STRING_LENGTH) {
+      throw new DataverseException("Value for field '{$field_name}' exceeds maximum length of " . self::MAX_STRING_LENGTH . " characters");
+    }
+
+    if (preg_match('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', $value)) {
+      throw new DataverseException("Value for field '{$field_name}' contains invalid control characters");
     }
   }
 

@@ -86,32 +86,12 @@ class ConfigurationManager {
   public function convertLegacyConfiguration(array $old_config): array {
     $new_config = $this->getDefaultConfiguration();
 
-    $basic_settings = ['enabled', 'azure_tenant_id', 'azure_client_id_key', 'azure_client_secret_key', 'dataverse_url'];
-    foreach ($basic_settings as $setting) {
-      if (isset($old_config[$setting])) {
-        $new_config[$setting] = $old_config[$setting];
-      }
-    }
-
-    if (!empty($old_config['field_mapping']) && !empty($old_config['target_entity'])) {
-      $target_entity = $old_config['target_entity'];
-      $field_mappings = [];
-
-      foreach ($old_config['field_mapping'] as $webform_field => $dataverse_field) {
-        if (!empty($dataverse_field)) {
-          $field_mappings[] = [
-            'webform_field' => $webform_field,
-            'entity' => $target_entity,
-            'field' => $dataverse_field,
-            'transform' => 'none',
-            'required' => false,
-            'relationship_to' => null,
-          ];
-        }
-      }
-
-      $new_config['field_mappings'] = $field_mappings;
-      $new_config['submission_order'] = [$target_entity];
+    // Copy basic settings
+    $this->copyBasicSettings($old_config, $new_config);
+    
+    // Convert field mappings if present
+    if ($this->hasLegacyFieldMappings($old_config)) {
+      $this->convertLegacyFieldMappings($old_config, $new_config);
     }
 
     return $new_config;
@@ -153,21 +133,48 @@ class ConfigurationManager {
       $results['errors'][] = $e->getMessage();
     }
 
-    $key_results = $this->validateRequiredKeys($config);
-    $results['key_validation'] = $key_results;
+    $this->validateKeys($config, $results);
+    $this->addConfigurationWarnings($config, $results);
 
-    foreach ($key_results as $key_type => $key_result) {
-      if (!$key_result['exists']) {
-        $results['errors'][] = "Key for {$key_type} does not exist";
-        $results['valid'] = false;
-      } elseif (!$key_result['has_value']) {
-        $results['errors'][] = "Key for {$key_type} has no value";
-        $results['valid'] = false;
+    return $results;
+  }
+
+  protected function copyBasicSettings(array $old_config, array &$new_config): void {
+    $basic_settings = [
+      'enabled', 'azure_tenant_id', 'azure_client_id_key', 
+      'azure_client_secret_key', 'dataverse_url'
+    ];
+    
+    foreach ($basic_settings as $setting) {
+      if (isset($old_config[$setting])) {
+        $new_config[$setting] = $old_config[$setting];
+      }
+    }
+  }
+
+  protected function hasLegacyFieldMappings(array $old_config): bool {
+    return !empty($old_config['field_mapping']) && !empty($old_config['target_entity']);
+  }
+
+  protected function convertLegacyFieldMappings(array $old_config, array &$new_config): void {
+    $target_entity = $old_config['target_entity'];
+    $field_mappings = [];
+
+    foreach ($old_config['field_mapping'] as $webform_field => $dataverse_field) {
+      if (!empty($dataverse_field)) {
+        $field_mappings[] = [
+          'webform_field' => $webform_field,
+          'entity' => $target_entity,
+          'field' => $dataverse_field,
+          'transform' => 'none',
+          'required' => false,
+          'relationship_to' => null,
+        ];
       }
     }
 
-    $this->addConfigurationWarnings($config, $results);
-    return $results;
+    $new_config['field_mappings'] = $field_mappings;
+    $new_config['submission_order'] = [$target_entity];
   }
 
   protected function validateKey(string $key_id, array &$result): void {
@@ -178,6 +185,21 @@ class ConfigurationManager {
       if ($key) {
         $value = $key->getKeyValue();
         $result['has_value'] = !empty($value);
+      }
+    }
+  }
+
+  protected function validateKeys(array $config, array &$results): void {
+    $key_results = $this->validateRequiredKeys($config);
+    $results['key_validation'] = $key_results;
+
+    foreach ($key_results as $key_type => $key_result) {
+      if (!$key_result['exists']) {
+        $results['errors'][] = "Key for {$key_type} does not exist";
+        $results['valid'] = false;
+      } elseif (!$key_result['has_value']) {
+        $results['errors'][] = "Key for {$key_type} has no value";
+        $results['valid'] = false;
       }
     }
   }

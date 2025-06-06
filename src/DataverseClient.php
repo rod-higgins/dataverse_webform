@@ -79,25 +79,29 @@ class DataverseClient implements DataverseClientInterface {
     $this->checkRateLimit();
     $this->validator->validateConfig($config);
     
-    $access_token = $this->azureAuth->getAccessToken($config);
-    if (!$access_token) {
-      throw new DataverseException('Failed to obtain access token');
+    try {
+      $access_token = $this->azureAuth->getAccessToken($config);
+      if (!$access_token) {
+        throw new DataverseException('Failed to obtain access token');
+      }
+
+      $client = $this->createHttpClient($config);
+      $response = $client->get('$metadata', [
+        'headers' => $this->buildHeaders($access_token, ['Accept' => 'application/xml']),
+        'timeout' => 10,
+      ]);
+
+      $success = $response->getStatusCode() === 200;
+      $this->cacheManager->setCachedTokenValidation($config, $success);
+      
+      if ($success) {
+        $this->recordApiCall();
+      }
+
+      return $success;
+    } catch (RequestException $e) {
+      throw new DataverseException('Connection test failed: ' . $e->getMessage(), 0, $e);
     }
-
-    $client = $this->createHttpClient($config);
-    $response = $client->get('$metadata', [
-      'headers' => $this->buildHeaders($access_token, ['Accept' => 'application/xml']),
-      'timeout' => 10,
-    ]);
-
-    $success = $response->getStatusCode() === 200;
-    $this->cacheManager->setCachedTokenValidation($config, $success);
-    
-    if ($success) {
-      $this->recordApiCall();
-    }
-
-    return $success;
   }
 
   public function getEntities(array $config): array {
@@ -109,27 +113,22 @@ class DataverseClient implements DataverseClientInterface {
     $this->checkRateLimit();
     $this->validator->validateConfig($config);
     
-    $access_token = $this->azureAuth->getAccessToken($config);
-    if (!$access_token) {
-      throw new DataverseException('Failed to get access token');
+    $access_token = $this->getValidAccessToken($config);
+    $query_builder = $this->createEntitiesQuery();
+
+    try {
+      $response = $this->createHttpClient($config)->get($query_builder->build(), [
+        'headers' => $this->buildHeaders($access_token),
+      ]);
+
+      $entities = $this->parseEntitiesResponse($response);
+      $this->cacheManager->setCachedEntities($config, $entities, DataverseCacheManager::LONG_TTL);
+      $this->recordApiCall();
+      
+      return $entities;
+    } catch (RequestException $e) {
+      throw new DataverseException('Failed to retrieve entities: ' . $e->getMessage(), 0, $e);
     }
-
-    $query_builder = new ODataQueryBuilder('EntityDefinitions');
-    $query_builder
-      ->select(['LogicalName', 'DisplayName', 'SchemaName', 'EntitySetName', 'Description'])
-      ->filter('IsCustomizable/Value', 'eq', true)
-      ->filter('IsValidForAdvancedFind/Value', 'eq', true)
-      ->orderBy('DisplayName.UserLocalizedLabel.Label');
-
-    $response = $this->createHttpClient($config)->get($query_builder->build(), [
-      'headers' => $this->buildHeaders($access_token),
-    ]);
-
-    $entities = $this->parseEntitiesResponse($response);
-    $this->cacheManager->setCachedEntities($config, $entities, DataverseCacheManager::LONG_TTL);
-    $this->recordApiCall();
-    
-    return $entities;
   }
 
   public function getEntityFields(array $config, string $entity_name): array {
@@ -143,26 +142,22 @@ class DataverseClient implements DataverseClientInterface {
     $this->checkRateLimit();
     $this->validator->validateConfig($config);
     
-    $access_token = $this->azureAuth->getAccessToken($config);
-    if (!$access_token) {
-      throw new DataverseException('Failed to get access token');
+    $access_token = $this->getValidAccessToken($config);
+    $query_builder = $this->createEntityFieldsQuery($entity_name);
+
+    try {
+      $response = $this->createHttpClient($config)->get($query_builder->build(), [
+        'headers' => $this->buildHeaders($access_token),
+      ]);
+
+      $fields = $this->parseFieldsResponse($response);
+      $this->cacheManager->setCachedEntityFields($config, $entity_name, $fields);
+      $this->recordApiCall();
+      
+      return $fields;
+    } catch (RequestException $e) {
+      throw new DataverseException('Failed to retrieve entity fields: ' . $e->getMessage(), 0, $e);
     }
-
-    $query_builder = new ODataQueryBuilder('EntityDefinitions');
-    $query_builder
-      ->filter('LogicalName', 'eq', $entity_name)
-      ->expand(['Attributes'])
-      ->select(['LogicalName', 'Attributes']);
-
-    $response = $this->createHttpClient($config)->get($query_builder->build(), [
-      'headers' => $this->buildHeaders($access_token),
-    ]);
-
-    $fields = $this->parseFieldsResponse($response);
-    $this->cacheManager->setCachedEntityFields($config, $entity_name, $fields);
-    $this->recordApiCall();
-    
-    return $fields;
   }
 
   public function createEntity(array $config, string $entity_name, array $data): array {
@@ -170,24 +165,25 @@ class DataverseClient implements DataverseClientInterface {
     $this->validator->validateEntityData($data);
     $this->checkRateLimit();
 
-    $access_token = $this->azureAuth->getAccessToken($config);
-    if (!$access_token) {
-      throw new DataverseException('Failed to get access token');
-    }
-
+    $access_token = $this->getValidAccessToken($config);
     $sanitized_data = $this->submissionProcessor->sanitizeEntityData($data);
-    $response = $this->createHttpClient($config)->post($entity_name, [
-      'headers' => $this->buildHeaders($access_token, ['Content-Type' => 'application/json']),
-      'json' => $sanitized_data,
-      'timeout' => $config['timeout'] ?? self::DEFAULT_TIMEOUT,
-    ]);
 
-    if ($response->getStatusCode() < 200 || $response->getStatusCode() >= 300) {
-      throw new DataverseException('Entity creation failed: HTTP ' . $response->getStatusCode());
+    try {
+      $response = $this->createHttpClient($config)->post($entity_name, [
+        'headers' => $this->buildHeaders($access_token, ['Content-Type' => 'application/json']),
+        'json' => $sanitized_data,
+        'timeout' => $config['timeout'] ?? self::DEFAULT_TIMEOUT,
+      ]);
+
+      if ($response->getStatusCode() < 200 || $response->getStatusCode() >= 300) {
+        throw new DataverseException('Entity creation failed: HTTP ' . $response->getStatusCode());
+      }
+
+      $this->recordApiCall();
+      return $this->parseEntityCreationResponse($response);
+    } catch (RequestException $e) {
+      throw new DataverseException('Entity creation request failed: ' . $e->getMessage(), 0, $e);
     }
-
-    $this->recordApiCall();
-    return $this->parseEntityCreationResponse($response);
   }
 
   public function batchCreateEntities(array $config, array $entities_data): array {
@@ -294,19 +290,39 @@ class DataverseClient implements DataverseClientInterface {
     return $results;
   }
 
+  protected function getValidAccessToken(array $config): string {
+    $access_token = $this->azureAuth->getAccessToken($config);
+    if (!$access_token) {
+      throw new DataverseException('Failed to get access token');
+    }
+    return $access_token;
+  }
+
+  protected function createEntitiesQuery(): ODataQueryBuilder {
+    $query_builder = new ODataQueryBuilder('EntityDefinitions');
+    return $query_builder
+      ->select(['LogicalName', 'DisplayName', 'SchemaName', 'EntitySetName', 'Description'])
+      ->filter('IsCustomizable/Value', 'eq', true)
+      ->filter('IsValidForAdvancedFind/Value', 'eq', true)
+      ->orderBy('DisplayName.UserLocalizedLabel.Label');
+  }
+
+  protected function createEntityFieldsQuery(string $entity_name): ODataQueryBuilder {
+    $query_builder = new ODataQueryBuilder('EntityDefinitions');
+    return $query_builder
+      ->filter('LogicalName', 'eq', $entity_name)
+      ->expand(['Attributes'])
+      ->select(['LogicalName', 'Attributes']);
+  }
+
   protected function parseEntitiesResponse($response): array {
     if ($response->getStatusCode() !== 200) {
       throw new DataverseException('Failed to retrieve entities: HTTP ' . $response->getStatusCode());
     }
 
-    $content = $response->getBody()->getContents();
-    $data = json_decode($content, true);
-    
-    if (json_last_error() !== JSON_ERROR_NONE) {
-      throw new DataverseException('Invalid JSON response from Dataverse');
-    }
-
+    $data = $this->parseJsonResponse($response);
     $entities = [];
+    
     if (isset($data['value'])) {
       foreach ($data['value'] as $entity) {
         $display_name = $entity['DisplayName']['UserLocalizedLabel']['Label'] ?? $entity['LogicalName'];
@@ -328,14 +344,9 @@ class DataverseClient implements DataverseClientInterface {
       throw new DataverseException('Failed to retrieve entity fields: HTTP ' . $response->getStatusCode());
     }
 
-    $content = $response->getBody()->getContents();
-    $data = json_decode($content, true);
-    
-    if (json_last_error() !== JSON_ERROR_NONE) {
-      throw new DataverseException('Invalid JSON response from Dataverse');
-    }
-
+    $data = $this->parseJsonResponse($response);
     $fields = [];
+    
     if (isset($data['value'][0]['Attributes'])) {
       foreach ($data['value'][0]['Attributes'] as $attribute) {
         if ($this->isValidFieldAttribute($attribute)) {
@@ -356,6 +367,17 @@ class DataverseClient implements DataverseClientInterface {
 
     uasort($fields, fn($a, $b) => strcmp($a['display_name'], $b['display_name']));
     return $fields;
+  }
+
+  protected function parseJsonResponse($response): array {
+    $content = $response->getBody()->getContents();
+    $data = json_decode($content, true);
+    
+    if (json_last_error() !== JSON_ERROR_NONE) {
+      throw new DataverseException('Invalid JSON response from Dataverse');
+    }
+    
+    return $data;
   }
 
   protected function isValidFieldAttribute(array $attribute): bool {
