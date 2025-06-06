@@ -11,14 +11,18 @@ use Drupal\webform\WebformSubmissionInterface;
 /**
  * Implements hook_webform_submission_insert().
  */
-function dataverse_webform_webform_submission_insert(WebformSubmissionInterface $webform_submission) {
+function dataverse_webform_webform_submission_insert(WebformSubmissionInterface $webform_submission): void {
   try {
     $handler = \Drupal::service('dataverse_webform.submission_handler');
     $handler->processSubmission($webform_submission);
   } catch (\Exception $e) {
     \Drupal::logger('dataverse_webform')->error(
       'Failed to process webform submission @submission_id: @error',
-      ['@submission_id' => $webform_submission->id(), '@error' => $e->getMessage()]
+      [
+        '@submission_id' => $webform_submission->id(),
+        '@error' => $e->getMessage(),
+        'trace' => $e->getTraceAsString(),
+      ]
     );
   }
 }
@@ -26,7 +30,7 @@ function dataverse_webform_webform_submission_insert(WebformSubmissionInterface 
 /**
  * Implements hook_form_FORM_ID_alter() for webform admin form.
  */
-function dataverse_webform_form_webform_admin_form_alter(&$form, FormStateInterface $form_state, $form_id) {
+function dataverse_webform_form_webform_admin_form_alter(array &$form, FormStateInterface $form_state, string $form_id): void {
   try {
     $form_builder = \Drupal::service('dataverse_webform.form_builder');
     $form_builder->buildWebformSettingsForm($form, $form_state);
@@ -43,7 +47,7 @@ function dataverse_webform_form_webform_admin_form_alter(&$form, FormStateInterf
 /**
  * Implements hook_theme().
  */
-function dataverse_webform_theme() {
+function dataverse_webform_theme(): array {
   return [
     'dataverse_webform_field_mapping_table' => [
       'variables' => [
@@ -65,7 +69,7 @@ function dataverse_webform_theme() {
 /**
  * Implements hook_help().
  */
-function dataverse_webform_help($route_name, \Drupal\Core\Routing\RouteMatchInterface $route_match) {
+function dataverse_webform_help(string $route_name, \Drupal\Core\Routing\RouteMatchInterface $route_match): string {
   if ($route_name === 'help.page.dataverse_webform') {
     return _dataverse_webform_build_help_content();
   }
@@ -76,7 +80,7 @@ function dataverse_webform_help($route_name, \Drupal\Core\Routing\RouteMatchInte
 /**
  * Implements hook_requirements().
  */
-function dataverse_webform_requirements($phase) {
+function dataverse_webform_requirements(string $phase): array {
   $requirements = [];
 
   if ($phase === 'runtime') {
@@ -90,7 +94,7 @@ function dataverse_webform_requirements($phase) {
 /**
  * Implements hook_cron().
  */
-function dataverse_webform_cron() {
+function dataverse_webform_cron(): void {
   try {
     _dataverse_webform_process_queue_items();
     _dataverse_webform_cleanup_old_data();
@@ -110,13 +114,14 @@ function _dataverse_webform_build_help_content(): string {
   $output .= '<p>' . t('The Dataverse Webform Integration module allows you to automatically submit webform data to Microsoft Dataverse with support for multi-entity mapping.') . '</p>';
   
   $output .= '<h3>' . t('Features') . '</h3>';
-  $output .= '<ul>';
-  $output .= '<li>' . t('Multi-entity mapping support') . '</li>';
-  $output .= '<li>' . t('Secure Azure AD authentication') . '</li>';
-  $output .= '<li>' . t('Field transformation and validation') . '</li>';
-  $output .= '<li>' . t('Queue-based processing for complex submissions') . '</li>';
-  $output .= '<li>' . t('Comprehensive error handling and logging') . '</li>';
-  $output .= '</ul>';
+  $features = [
+    t('Multi-entity mapping support'),
+    t('Secure Azure AD authentication'),
+    t('Field transformation and validation'),
+    t('Queue-based processing for complex submissions'),
+    t('Comprehensive error handling and logging'),
+  ];
+  $output .= '<ul><li>' . implode('</li><li>', $features) . '</li></ul>';
   
   $output .= '<h3>' . t('Configuration') . '</h3>';
   $output .= '<p>' . t('Configure Azure AD credentials using the <a href=":key_url">Key module</a> and then enable Dataverse integration on individual webforms.', [
@@ -235,7 +240,7 @@ function _dataverse_webform_check_configuration_issues(): array {
 /**
  * Validate webform configuration.
  */
-function _dataverse_webform_validate_webform_config($webform, array $config): array {
+function _dataverse_webform_validate_webform_config(\Drupal\webform\WebformInterface $webform, array $config): array {
   $issues = [];
   $webform_id = $webform->id();
   

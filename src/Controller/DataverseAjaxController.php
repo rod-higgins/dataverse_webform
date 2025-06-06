@@ -47,11 +47,9 @@ class DataverseAjaxController extends ControllerBase {
       $entities = $this->dataverseClient->getEntities($config);
       $entity_options = $this->formatEntitiesForResponse($entities);
 
-      return new JsonResponse([
-        'success' => true,
+      return $this->createSuccessResponse([
         'entities' => $entity_options,
         'count' => count($entity_options),
-        'timestamp' => time(),
       ]);
 
     } catch (DataverseException $e) {
@@ -77,12 +75,10 @@ class DataverseAjaxController extends ControllerBase {
       $fields = $this->dataverseClient->getEntityFields($config, $entity_name);
       $field_options = $this->formatFieldsForResponse($fields);
 
-      return new JsonResponse([
-        'success' => true,
+      return $this->createSuccessResponse([
         'fields' => $field_options,
         'entity' => $entity_name,
         'count' => count($field_options),
-        'timestamp' => time(),
       ]);
 
     } catch (DataverseException $e) {
@@ -111,11 +107,9 @@ class DataverseAjaxController extends ControllerBase {
         }
       }
 
-      return new JsonResponse([
-        'success' => true,
+      return $this->createSuccessResponse([
         'validation' => $validation_results,
         'connection_test' => $connection_test,
-        'timestamp' => time(),
       ]);
 
     } catch (\Exception $e) {
@@ -142,12 +136,10 @@ class DataverseAjaxController extends ControllerBase {
       $config = $this->buildConfigFromRequest($request);
       $suggestions = $this->generateMappingSuggestions($config, $webform_fields, $target_entities);
 
-      return new JsonResponse([
-        'success' => true,
+      return $this->createSuccessResponse([
         'suggestions' => $suggestions,
         'webform_fields' => $webform_fields,
         'entities' => $target_entities,
-        'timestamp' => time(),
       ]);
 
     } catch (\Exception $e) {
@@ -265,8 +257,6 @@ class DataverseAjaxController extends ControllerBase {
 
   protected function generateFieldMappingSuggestions(array $webform_fields, array $entity_fields): array {
     $suggestions = [];
-    
-    // Common field name mappings
     $common_mappings = $this->getCommonFieldMappings();
 
     foreach ($webform_fields as $webform_field) {
@@ -375,6 +365,13 @@ class DataverseAjaxController extends ControllerBase {
     return $matches;
   }
 
+  protected function createSuccessResponse(array $data): JsonResponse {
+    return new JsonResponse(array_merge([
+      'success' => true,
+      'timestamp' => time(),
+    ], $data));
+  }
+
   protected function createErrorResponse(string $message, string $error_type, int $status_code): JsonResponse {
     return new JsonResponse([
       'success' => false,
@@ -387,7 +384,11 @@ class DataverseAjaxController extends ControllerBase {
   protected function logUnexpectedError(string $method, \Exception $e): void {
     $this->getLogger('dataverse_webform')->error(
       'Unexpected error in @method: @error',
-      ['@method' => $method, '@error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]
+      [
+        '@method' => $method, 
+        '@error' => $e->getMessage(), 
+        'trace' => $e->getTraceAsString()
+      ]
     );
   }
 

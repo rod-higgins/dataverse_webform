@@ -30,13 +30,13 @@ class SubmissionProcessor {
         continue;
       }
 
-      $processed_mapping = $this->processMapping($mapping, $submission_data);
-      if ($processed_mapping !== null) {
+      $processed_value = $this->processMapping($mapping, $submission_data);
+      if ($processed_value !== null) {
         $entity_name = $mapping['entity'];
         if (!isset($entities_data[$entity_name])) {
           $entities_data[$entity_name] = [];
         }
-        $entities_data[$entity_name][$mapping['field']] = $processed_mapping;
+        $entities_data[$entity_name][$mapping['field']] = $processed_value;
       }
     }
 

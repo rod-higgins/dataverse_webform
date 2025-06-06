@@ -8,7 +8,7 @@
 /**
  * Implements hook_requirements().
  */
-function dataverse_webform_requirements($phase) {
+function dataverse_webform_requirements(string $phase): array {
   $requirements = [];
 
   if ($phase === 'install') {
@@ -28,19 +28,10 @@ function dataverse_webform_requirements($phase) {
 /**
  * Implements hook_install().
  */
-function dataverse_webform_install() {
+function dataverse_webform_install(): void {
   try {
     $config = \Drupal::configFactory()->getEditable('dataverse_webform.settings');
-    $config->setMultiple([
-      'default_timeout' => 30,
-      'default_batch_size' => 10,
-      'default_retry_attempts' => 3,
-      'cache_entity_metadata_hours' => 1,
-      'rate_limit_requests_per_hour' => 100,
-      'rate_limit_enabled' => true,
-      'cache_tags_enabled' => true,
-      'force_queue_processing' => false,
-    ])->save();
+    $config->setMultiple(_dataverse_webform_get_default_settings())->save();
     
     \Drupal::messenger()->addStatus(t('Dataverse Webform Integration module installed successfully. Configure your Azure AD credentials using the <a href="@url">Key module</a>.', [
       '@url' => \Drupal::url('entity.key.collection'),
@@ -57,7 +48,7 @@ function dataverse_webform_install() {
 /**
  * Implements hook_uninstall().
  */
-function dataverse_webform_uninstall() {
+function dataverse_webform_uninstall(): void {
   try {
     dataverse_webform_clean_webform_settings();
     dataverse_webform_clean_cache_and_state();
@@ -72,6 +63,22 @@ function dataverse_webform_uninstall() {
     );
     // Don't throw exception during uninstall as it prevents module removal
   }
+}
+
+/**
+ * Get default settings for the module.
+ */
+function _dataverse_webform_get_default_settings(): array {
+  return [
+    'default_timeout' => 30,
+    'default_batch_size' => 10,
+    'default_retry_attempts' => 3,
+    'cache_entity_metadata_hours' => 1,
+    'rate_limit_requests_per_hour' => 100,
+    'rate_limit_enabled' => true,
+    'cache_tags_enabled' => true,
+    'force_queue_processing' => false,
+  ];
 }
 
 /**
@@ -135,20 +142,34 @@ function dataverse_webform_check_php_requirements(): array {
   }
 
   // Check memory limit
-  $memory_limit = ini_get('memory_limit');
-  if ($memory_limit !== '-1') {
-    $memory_bytes = dataverse_webform_parse_size($memory_limit);
-    if ($memory_bytes < 128 * 1024 * 1024) { // 128MB
-      $requirements['dataverse_webform_memory'] = [
-        'title' => t('Dataverse Webform Integration'),
-        'value' => t('PHP memory limit: @limit', ['@limit' => $memory_limit]),
-        'description' => t('At least 128MB of memory is recommended for processing Dataverse submissions.'),
-        'severity' => REQUIREMENT_WARNING,
-      ];
-    }
+  $memory_requirement = dataverse_webform_check_memory_limit();
+  if ($memory_requirement) {
+    $requirements['dataverse_webform_memory'] = $memory_requirement;
   }
   
   return $requirements;
+}
+
+/**
+ * Check memory limit requirement.
+ */
+function dataverse_webform_check_memory_limit(): ?array {
+  $memory_limit = ini_get('memory_limit');
+  if ($memory_limit === '-1') {
+    return null; // Unlimited memory
+  }
+
+  $memory_bytes = dataverse_webform_parse_size($memory_limit);
+  if ($memory_bytes < 128 * 1024 * 1024) { // 128MB
+    return [
+      'title' => t('Dataverse Webform Integration'),
+      'value' => t('PHP memory limit: @limit', ['@limit' => $memory_limit]),
+      'description' => t('At least 128MB of memory is recommended for processing Dataverse submissions.'),
+      'severity' => REQUIREMENT_WARNING,
+    ];
+  }
+
+  return null;
 }
 
 /**
@@ -242,7 +263,7 @@ function dataverse_webform_check_configuration_issues(): array {
 /**
  * Validate webform configuration.
  */
-function dataverse_webform_validate_webform_config($webform, array $config): array {
+function dataverse_webform_validate_webform_config(\Drupal\webform\WebformInterface $webform, array $config): array {
   $issues = [];
   $webform_id = $webform->id();
   
@@ -276,18 +297,19 @@ function dataverse_webform_validate_webform_config($webform, array $config): arr
     $issues[] = "Webform {$webform_id}: error validating keys - {$e->getMessage()}";
   }
   
-  // Validate URLs
-  if (!empty($config['dataverse_url'])) {
-    if (!filter_var($config['dataverse_url'], FILTER_VALIDATE_URL) || 
-        !str_starts_with($config['dataverse_url'], 'https://')) {
-      $issues[] = "Webform {$webform_id}: invalid Dataverse URL";
-    }
-  }
-  
-  // Validate GUID format for tenant ID
-  if (!empty($config['azure_tenant_id'])) {
-    if (!preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $config['azure_tenant_id'])) {
-      $issues[] = "Webform {$webform_id}: invalid Azure Tenant ID format";
+  // Validate URLs and format
+  $validation_checks = [
+    'dataverse_url' => function($url) {
+      return filter_var($url, FILTER_VALIDATE_URL) && str_starts_with($url, 'https://');
+    },
+    'azure_tenant_id' => function($tenant_id) {
+      return preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $tenant_id);
+    },
+  ];
+
+  foreach ($validation_checks as $field => $validator) {
+    if (!empty($config[$field]) && !$validator($config[$field])) {
+      $issues[] = "Webform {$webform_id}: invalid {$field} format";
     }
   }
   
@@ -334,19 +356,7 @@ function dataverse_webform_clean_cache_and_state(): void {
     
     // Clear state entries
     $state = \Drupal::state();
-    $keys_to_delete = [];
-    
-    // Get all state keys that start with our prefix
-    $connection = \Drupal::database();
-    $result = $connection->select('key_value', 'kv')
-      ->fields('kv', ['name'])
-      ->condition('collection', 'state')
-      ->condition('name', 'dataverse_webform%', 'LIKE')
-      ->execute();
-    
-    foreach ($result as $row) {
-      $keys_to_delete[] = $row->name;
-    }
+    $keys_to_delete = dataverse_webform_get_state_keys_to_clean();
     
     // Delete state entries
     foreach ($keys_to_delete as $key) {
@@ -362,6 +372,28 @@ function dataverse_webform_clean_cache_and_state(): void {
       'Error cleaning cache and state: @error',
       ['@error' => $e->getMessage()]
     );
+  }
+}
+
+/**
+ * Get state keys that need to be cleaned.
+ */
+function dataverse_webform_get_state_keys_to_clean(): array {
+  try {
+    $connection = \Drupal::database();
+    $result = $connection->select('key_value', 'kv')
+      ->fields('kv', ['name'])
+      ->condition('collection', 'state')
+      ->condition('name', 'dataverse_webform%', 'LIKE')
+      ->execute();
+    
+    return $result->fetchCol();
+  } catch (\Exception $e) {
+    \Drupal::logger('dataverse_webform')->warning(
+      'Error retrieving state keys for cleanup: @error',
+      ['@error' => $e->getMessage()]
+    );
+    return [];
   }
 }
 

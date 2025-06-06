@@ -173,6 +173,26 @@ class ConfigurationManager {
     return $safe_config;
   }
 
+  public function isValidConfiguration(array $config): bool {
+    $validation_result = $this->validateConfiguration($config);
+    return $validation_result['valid'] && empty($validation_result['errors']);
+  }
+
+  public function getConfigurationSummary(array $config): array {
+    $entities = $this->getEntitiesFromMappings($config['field_mappings'] ?? []);
+    
+    return [
+      'enabled' => $config['enabled'] ?? false,
+      'dataverse_url' => $config['dataverse_url'] ?? '',
+      'entity_count' => count($entities),
+      'entities' => $entities,
+      'field_mapping_count' => count($config['field_mappings'] ?? []),
+      'has_submission_order' => !empty($config['submission_order']),
+      'batch_size' => $config['batch_size'] ?? self::DEFAULT_BATCH_SIZE,
+      'timeout' => $config['timeout'] ?? self::DEFAULT_TIMEOUT,
+    ];
+  }
+
   protected function copyBasicSettings(array $old_config, array &$new_config): void {
     $basic_settings = [
       'enabled', 'azure_tenant_id', 'azure_client_id_key', 
@@ -268,12 +288,15 @@ class ConfigurationManager {
     }
 
     // Add warnings for potentially problematic settings
-    if (isset($config['timeout']) && $config['timeout'] > 120) {
-      $results['warnings'][] = 'Request timeout is set very high (' . $config['timeout'] . 's). This may cause performance issues.';
-    }
+    $warning_checks = [
+      'timeout' => [120, 'Request timeout is set very high (%ds). This may cause performance issues.'],
+      'batch_size' => [50, 'Batch size is set very high (%d). This may cause memory or timeout issues.'],
+    ];
 
-    if (isset($config['batch_size']) && $config['batch_size'] > 50) {
-      $results['warnings'][] = 'Batch size is set very high (' . $config['batch_size'] . '). This may cause memory or timeout issues.';
+    foreach ($warning_checks as $field => [$threshold, $message]) {
+      if (isset($config[$field]) && $config[$field] > $threshold) {
+        $results['warnings'][] = sprintf($message, $config[$field]);
+      }
     }
   }
 

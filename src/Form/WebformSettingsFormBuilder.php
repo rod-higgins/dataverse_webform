@@ -160,8 +160,7 @@ class WebformSettingsFormBuilder {
     ];
 
     $mappings_config = &$container['field_mappings_config'];
-    $webform = $this->getWebformFromFormState();
-    $webform_fields = $this->getWebformFields($webform);
+    $webform_fields = $this->getWebformFieldsFromState($config);
 
     if (empty($webform_fields)) {
       $mappings_config['no_fields'] = [
@@ -290,7 +289,7 @@ class WebformSettingsFormBuilder {
         'type' => 'number',
         'title' => $this->t('Request Timeout (seconds)'),
         'description' => $this->t('Maximum time to wait for API responses.'),
-        'default' => $config['timeout'],
+        'default' => $config['timeout'] ?? 30,
         'min' => 5,
         'max' => 300,
       ],
@@ -298,7 +297,7 @@ class WebformSettingsFormBuilder {
         'type' => 'number',
         'title' => $this->t('Batch Size'),
         'description' => $this->t('Number of entities to process in each batch operation.'),
-        'default' => $config['batch_size'],
+        'default' => $config['batch_size'] ?? 10,
         'min' => 1,
         'max' => 100,
       ],
@@ -306,7 +305,7 @@ class WebformSettingsFormBuilder {
         'type' => 'number',
         'title' => $this->t('Retry Attempts'),
         'description' => $this->t('Number of times to retry failed submissions.'),
-        'default' => $config['retry_attempts'],
+        'default' => $config['retry_attempts'] ?? 3,
         'min' => 0,
         'max' => 5,
       ],
@@ -327,7 +326,7 @@ class WebformSettingsFormBuilder {
       '#type' => 'checkbox',
       '#title' => $this->t('Stop processing on error'),
       '#description' => $this->t('Stop processing additional entities when one entity creation fails.'),
-      '#default_value' => $config['stop_on_error'],
+      '#default_value' => $config['stop_on_error'] ?? true,
     ];
   }
 
@@ -497,27 +496,10 @@ class WebformSettingsFormBuilder {
       $list_markup . '</div>';
   }
 
-  protected function getWebformFromFormState(): ?\Drupal\webform\WebformInterface {
-    // This would typically come from the form state, but we'll return null for now
-    // In practice, this would be: $form_state->getFormObject()->getEntity()
-    return null;
-  }
-
-  protected function getWebformFields($webform): array {
-    if (!$webform) {
-      return [];
-    }
-
-    $webform_elements = $webform->getElementsInitializedAndFlattened();
-    $webform_fields = [];
-    
-    foreach ($webform_elements as $key => $element) {
-      if (isset($element['#type']) && !in_array($element['#type'], ['markup', 'processed_text', 'webform_actions'])) {
-        $webform_fields[$key] = $element['#title'] ?? $key;
-      }
-    }
-
-    return $webform_fields;
+  protected function getWebformFieldsFromState(array $config): array {
+    // This would typically get the webform from form state
+    // For now, return empty array if we can't determine fields
+    return [];
   }
 
   protected function findExistingMapping(array $field_mappings, string $field_key): ?array {
@@ -614,4 +596,5 @@ class WebformSettingsFormBuilder {
       'timeout' => $config_values['advanced_config']['timeout'] ?? 30,
     ];
   }
+
 }

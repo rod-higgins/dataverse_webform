@@ -46,12 +46,12 @@ class AzureAdAuthService {
   public function getAccessToken(array $config): ?string {
     $this->validateAuthConfig($config);
 
-    $cached_token = $this->getCachedTokenWithLock($config);
+    $cached_token = $this->getCachedTokenSafely($config);
     if ($cached_token) {
       return $cached_token;
     }
 
-    return $this->getNewTokenWithLock($config);
+    return $this->refreshTokenSafely($config);
   }
 
   public function invalidateToken(array $config): void {
@@ -74,7 +74,7 @@ class AzureAdAuthService {
     return $this->getCachedToken($config) !== null;
   }
 
-  protected function getCachedTokenWithLock(array $config): ?string {
+  protected function getCachedTokenSafely(array $config): ?string {
     $cache_key = $this->buildCacheKey($config);
     $lock_key = $cache_key . ':lock';
     
@@ -104,7 +104,7 @@ class AzureAdAuthService {
     return null;
   }
 
-  protected function getNewTokenWithLock(array $config): ?string {
+  protected function refreshTokenSafely(array $config): ?string {
     $cache_key = $this->buildCacheKey($config);
     $lock_key = $cache_key . ':refresh';
     
@@ -172,7 +172,11 @@ class AzureAdAuthService {
   }
 
   protected function makeTokenRequest(array $config, array $credentials): ResponseInterface {
-    $client = $this->httpClientFactory->fromOptions(['timeout' => self::DEFAULT_REQUEST_TIMEOUT]);
+    $client = $this->httpClientFactory->fromOptions([
+      'timeout' => self::DEFAULT_REQUEST_TIMEOUT,
+      'connect_timeout' => 10,
+    ]);
+    
     $oauth_url = sprintf(self::OAUTH_ENDPOINT_TEMPLATE, $credentials['tenant_id']);
     
     return $client->post($oauth_url, [
@@ -249,7 +253,7 @@ class AzureAdAuthService {
     $body = json_decode($content, true);
     
     if (json_last_error() !== JSON_ERROR_NONE) {
-      throw DataverseException::authenticationError('Invalid JSON response from Azure AD');
+      throw DataverseException::authenticationError('Invalid JSON response from Azure AD: ' . json_last_error_msg());
     }
     
     return $body;
@@ -285,12 +289,6 @@ class AzureAdAuthService {
   }
 
   protected function validateAuthConfig(array $config): void {
-    $this->validateRequiredFields($config);
-    $this->validateTenantIdFormat($config['azure_tenant_id']);
-    $this->validateDataverseUrl($config['dataverse_url']);
-  }
-
-  protected function validateRequiredFields(array $config): void {
     $required_fields = ['azure_tenant_id', 'azure_client_id_key', 'azure_client_secret_key', 'dataverse_url'];
 
     foreach ($required_fields as $field) {
@@ -298,16 +296,14 @@ class AzureAdAuthService {
         throw DataverseException::configurationError("Missing required Azure AD configuration: {$field}");
       }
     }
-  }
 
-  protected function validateTenantIdFormat(string $tenant_id): void {
-    if (!preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $tenant_id)) {
+    // Validate tenant ID format
+    if (!preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $config['azure_tenant_id'])) {
       throw DataverseException::validationError('Azure Tenant ID must be a valid GUID format');
     }
-  }
 
-  protected function validateDataverseUrl(string $dataverse_url): void {
-    if (!filter_var($dataverse_url, FILTER_VALIDATE_URL) || !str_starts_with($dataverse_url, 'https://')) {
+    // Validate Dataverse URL
+    if (!filter_var($config['dataverse_url'], FILTER_VALIDATE_URL) || !str_starts_with($config['dataverse_url'], 'https://')) {
       throw DataverseException::validationError('Dataverse URL must be a valid HTTPS URL');
     }
   }

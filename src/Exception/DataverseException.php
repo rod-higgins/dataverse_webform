@@ -44,29 +44,28 @@ class DataverseException extends \Exception {
   }
 
   public function isAuthenticationError(): bool {
-    $auth_codes = [
+    $auth_indicators = [
       'unauthorized', 'invalid_token', 'token_expired', 
-      'invalid_client', 'invalid_grant', self::ERROR_TYPE_AUTH
+      'invalid_client', 'invalid_grant', self::ERROR_TYPE_AUTH,
+      'authentication', 'access denied', 'forbidden'
     ];
     
-    return in_array($this->dataverseErrorCode, $auth_codes) || 
-           $this->containsAuthenticationKeywords();
+    return $this->hasErrorIndicator($auth_indicators);
   }
 
   public function isRateLimitError(): bool {
     return $this->getCode() === 429 || 
            $this->dataverseErrorCode === self::ERROR_TYPE_RATE_LIMIT ||
-           $this->containsRateLimitKeywords();
+           $this->hasErrorIndicator(['rate limit', 'throttled', 'quota exceeded', 'too many requests']);
   }
 
   public function isValidationError(): bool {
-    $validation_codes = [
-      'invalid_request', self::ERROR_TYPE_VALIDATION, 'bad_request', self::ERROR_TYPE_CONFIG
+    $validation_indicators = [
+      'invalid_request', self::ERROR_TYPE_VALIDATION, 'bad_request', 
+      self::ERROR_TYPE_CONFIG, 'validation', 'invalid', 'malformed', 'required field'
     ];
     
-    return $this->getCode() === 400 ||
-           in_array($this->dataverseErrorCode, $validation_codes) ||
-           $this->containsValidationKeywords();
+    return $this->getCode() === 400 || $this->hasErrorIndicator($validation_indicators);
   }
 
   public function isRetryable(): bool {
@@ -75,20 +74,20 @@ class DataverseException extends \Exception {
       return true;
     }
     
-    $retryable_codes = [
+    $retryable_indicators = [
       'service_unavailable', 'timeout', 'internal_error', 'temporary_failure'
     ];
     
-    return in_array($this->dataverseErrorCode, $retryable_codes);
+    return $this->hasErrorIndicator($retryable_indicators);
   }
 
   public function isNetworkError(): bool {
-    $network_codes = [
-      self::ERROR_TYPE_NETWORK, 'connection_timeout', 'dns_error', 'ssl_error'
+    $network_indicators = [
+      self::ERROR_TYPE_NETWORK, 'connection_timeout', 'dns_error', 'ssl_error',
+      'network', 'connection', 'timeout', 'dns', 'ssl', 'certificate', 'host'
     ];
     
-    return in_array($this->dataverseErrorCode, $network_codes) ||
-           $this->containsNetworkKeywords();
+    return $this->hasErrorIndicator($network_indicators);
   }
 
   public function getSeverity(): string {
@@ -221,31 +220,13 @@ class DataverseException extends \Exception {
     return $message;
   }
 
-  protected function containsAuthenticationKeywords(): bool {
-    $keywords = ['authentication', 'unauthorized', 'access denied', 'invalid credentials', 'forbidden'];
-    return $this->containsKeywords($keywords);
-  }
-
-  protected function containsRateLimitKeywords(): bool {
-    $keywords = ['rate limit', 'throttled', 'quota exceeded', 'too many requests'];
-    return $this->containsKeywords($keywords);
-  }
-
-  protected function containsValidationKeywords(): bool {
-    $keywords = ['validation', 'invalid', 'bad request', 'malformed', 'required field'];
-    return $this->containsKeywords($keywords);
-  }
-
-  protected function containsNetworkKeywords(): bool {
-    $keywords = ['network', 'connection', 'timeout', 'dns', 'ssl', 'certificate', 'host'];
-    return $this->containsKeywords($keywords);
-  }
-
-  protected function containsKeywords(array $keywords): bool {
+  protected function hasErrorIndicator(array $indicators): bool {
     $message_lower = strtolower($this->getMessage());
+    $error_code_lower = strtolower($this->dataverseErrorCode ?? '');
     
-    foreach ($keywords as $keyword) {
-      if (strpos($message_lower, $keyword) !== false) {
+    foreach ($indicators as $indicator) {
+      if (strpos($message_lower, $indicator) !== false || 
+          strpos($error_code_lower, $indicator) !== false) {
         return true;
       }
     }

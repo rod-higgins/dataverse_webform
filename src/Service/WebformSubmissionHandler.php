@@ -73,22 +73,12 @@ class WebformSubmissionHandler {
       $this->validateSubmissionPreProcessing($webform_submission, $dataverse_config);
       $results = $this->dataverseClient->submitToDataverse($webform_submission, $dataverse_config);
       
-      $this->recordSubmissionSuccess($webform_submission, $results, $start_time);
-      $this->logSubmissionResults($webform_submission, $results);
+      $this->handleSubmissionSuccess($webform_submission, $results, $start_time);
       
     } catch (DataverseException $e) {
-      $this->recordSubmissionFailure($webform_submission, $e, $start_time);
-      $this->handleSubmissionError($webform_submission, $dataverse_config, $e);
+      $this->handleSubmissionError($webform_submission, $dataverse_config, $e, $start_time);
     } catch (\Exception $e) {
-      $this->recordSubmissionFailure($webform_submission, $e, $start_time);
-      $this->loggerFactory->get('dataverse_webform')->error(
-        'Unexpected error processing Dataverse submission for webform @webform_id (submission @submission_id): @error',
-        [
-          '@webform_id' => $webform_submission->getWebform()->id(),
-          '@submission_id' => $webform_submission->id(),
-          '@error' => $e->getMessage(),
-        ]
-      );
+      $this->handleUnexpectedError($webform_submission, $e, $start_time);
     }
   }
 
@@ -97,6 +87,8 @@ class WebformSubmissionHandler {
     
     $queue_item = $this->buildQueueItem($webform_submission, $dataverse_config);
     $queue->createItem($queue_item);
+    
+    $this->updateSubmissionStats($webform_submission->getWebform()->id(), 'queued_submissions', 1);
     
     $this->loggerFactory->get('dataverse_webform')->info(
       'Queued Dataverse submission for webform @webform_id (submission @submission_id)',
@@ -155,10 +147,12 @@ class WebformSubmissionHandler {
   }
 
   protected function hasAvailableResources(): bool {
+    // Check memory usage
     if (memory_get_usage() > self::MEMORY_THRESHOLD) {
       return false;
     }
 
+    // Check execution time limits
     $max_execution_time = ini_get('max_execution_time');
     return $max_execution_time <= 0 || $max_execution_time >= self::TIME_THRESHOLD;
   }
@@ -191,19 +185,42 @@ class WebformSubmissionHandler {
     }
   }
 
-  protected function handleSubmissionError(WebformSubmissionInterface $webform_submission, array $dataverse_config, DataverseException $e): void {
+  protected function handleSubmissionSuccess(WebformSubmissionInterface $webform_submission, array $results, float $start_time): void {
+    $this->recordSubmissionSuccess($webform_submission, $results, $start_time);
+    $this->logSubmissionResults($webform_submission, $results);
+  }
+
+  protected function handleSubmissionError(WebformSubmissionInterface $webform_submission, array $dataverse_config, DataverseException $e, float $start_time): void {
+    $this->recordSubmissionFailure($webform_submission, $e, $start_time);
+    
     $this->loggerFactory->get('dataverse_webform')->error(
       'Failed to process Dataverse submission for webform @webform_id (submission @submission_id): @error',
       [
         '@webform_id' => $webform_submission->getWebform()->id(),
         '@submission_id' => $webform_submission->id(),
         '@error' => $e->getMessage(),
+        'error_type' => $e->getDataverseErrorCode(),
+        'severity' => $e->getSeverity(),
       ]
     );
 
     if ($e->isRetryable() && $this->shouldRetrySubmission($webform_submission, $dataverse_config)) {
       $this->scheduleRetry($webform_submission, $dataverse_config, $e);
     }
+  }
+
+  protected function handleUnexpectedError(WebformSubmissionInterface $webform_submission, \Exception $e, float $start_time): void {
+    $this->recordSubmissionFailure($webform_submission, $e, $start_time);
+    
+    $this->loggerFactory->get('dataverse_webform')->error(
+      'Unexpected error processing Dataverse submission for webform @webform_id (submission @submission_id): @error',
+      [
+        '@webform_id' => $webform_submission->getWebform()->id(),
+        '@submission_id' => $webform_submission->id(),
+        '@error' => $e->getMessage(),
+        'trace' => $e->getTraceAsString(),
+      ]
+    );
   }
 
   protected function logSubmissionResults(WebformSubmissionInterface $webform_submission, array $results): void {
@@ -252,7 +269,7 @@ class WebformSubmissionHandler {
     $retry_count = $this->state->get($retry_key, 0) + 1;
     $this->state->set($retry_key, $retry_count);
     
-    $delay = min(300, pow(2, $retry_count) * 30);
+    $delay = min(300, pow(2, $retry_count) * 30); // Exponential backoff with 5min cap
     
     $queue = $this->queueFactory->get(self::QUEUE_NAME);
     $queue_item = array_merge(

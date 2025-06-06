@@ -14,10 +14,12 @@ class ODataQueryBuilder {
   public const MAX_IDENTIFIER_LENGTH = 100;
   public const IDENTIFIER_PATTERN = '/^[a-zA-Z][a-zA-Z0-9_.\/_]*$/';
   public const DANGEROUS_CHARS_PATTERN = '/[<>\'";]/';
+  
   public const ALLOWED_OPERATORS = [
     'eq', 'ne', 'gt', 'ge', 'lt', 'le', 
     'contains', 'startswith', 'endswith', 'in', 'not'
   ];
+  
   public const ALLOWED_DIRECTIONS = ['asc', 'desc'];
 
   protected string $entitySet;
@@ -173,6 +175,18 @@ class ODataQueryBuilder {
     return clone $this;
   }
 
+  public function getEntitySet(): string {
+    return $this->entitySet;
+  }
+
+  public function hasFilters(): bool {
+    return !empty($this->filters);
+  }
+
+  public function getFilterCount(): int {
+    return count($this->filters);
+  }
+
   protected function buildQueryParameters(): array {
     $query_params = [];
 
@@ -278,6 +292,7 @@ class ODataQueryBuilder {
       throw DataverseException::validationError('String value exceeds maximum length of ' . self::MAX_STRING_LENGTH . ' characters');
     }
     
+    // Escape single quotes for OData
     $escaped = str_replace("'", "''", $value);
     return "'{$escaped}'";
   }

@@ -16,12 +16,20 @@ class ValidationService {
   public const MAX_STRING_LENGTH = 4000;
   public const MAX_IDENTIFIER_LENGTH = 100;
   public const MAX_ENTITY_NAME_LENGTH = 64;
+  
   public const RESERVED_FIELDS = [
     'ownerid', 'statecode', 'statuscode', 'createdby', 'createdon',
     'modifiedby', 'modifiedon', 'versionnumber',
   ];
+  
   public const ALLOWED_TRANSFORMS = [
     'none', 'string', 'number', 'boolean', 'date', 'email', 'phone', 'url', 'json'
+  ];
+
+  public const NUMERIC_SETTINGS = [
+    'batch_size' => [1, 100],
+    'retry_attempts' => [0, 5],
+    'timeout' => [5, 300],
   ];
 
   protected LoggerChannelFactoryInterface $loggerFactory;
@@ -83,6 +91,32 @@ class ValidationService {
     }
   }
 
+  public function isValidGuid(string $guid): bool {
+    return (bool) preg_match(self::GUID_PATTERN, $guid);
+  }
+
+  public function isValidUrl(string $url, bool $require_https = true): bool {
+    if (!filter_var($url, FILTER_VALIDATE_URL)) {
+      return false;
+    }
+
+    return !$require_https || str_starts_with($url, 'https://');
+  }
+
+  public function validateBatchConfigurationSet(array $configs): array {
+    $errors = [];
+    
+    foreach ($configs as $index => $config) {
+      try {
+        $this->validateConfig($config);
+      } catch (DataverseException $e) {
+        $errors["config_{$index}"] = $e->getMessage();
+      }
+    }
+
+    return $errors;
+  }
+
   protected function validateRequiredFields(array $config): void {
     $required_fields = ['azure_tenant_id', 'azure_client_id_key', 'azure_client_secret_key', 'dataverse_url'];
 
@@ -99,25 +133,19 @@ class ValidationService {
   }
 
   protected function validateAzureTenantId(string $tenant_id): void {
-    if (!preg_match(self::GUID_PATTERN, $tenant_id)) {
+    if (!$this->isValidGuid($tenant_id)) {
       throw DataverseException::validationError('Azure Tenant ID must be a valid GUID format');
     }
   }
 
   protected function validateDataverseUrl(string $url): void {
-    if (!filter_var($url, FILTER_VALIDATE_URL) || !str_starts_with($url, 'https://')) {
+    if (!$this->isValidUrl($url, true)) {
       throw DataverseException::validationError('Dataverse URL must be a valid HTTPS URL');
     }
   }
 
   protected function validateOptionalSettings(array $config): void {
-    $numeric_settings = [
-      'batch_size' => [1, 100],
-      'retry_attempts' => [0, 5],
-      'timeout' => [5, 300],
-    ];
-
-    foreach ($numeric_settings as $field => [$min, $max]) {
+    foreach (self::NUMERIC_SETTINGS as $field => [$min, $max]) {
       if (isset($config[$field])) {
         $this->validateNumericRange($field, (int) $config[$field], $min, $max);
       }
@@ -141,6 +169,8 @@ class ValidationService {
       $this->validateSingleMapping($index, $mapping);
       $entities_used[] = $mapping['entity'];
     }
+
+    $this->checkDuplicateMappings($field_mappings);
   }
 
   protected function validateSingleMapping(int $index, $mapping): void {
@@ -163,6 +193,23 @@ class ValidationService {
     
     if (!empty($missing_fields)) {
       throw DataverseException::validationError("Missing required fields in mapping at index {$index}: " . implode(', ', $missing_fields));
+    }
+  }
+
+  protected function checkDuplicateMappings(array $field_mappings): void {
+    $seen_mappings = [];
+    
+    foreach ($field_mappings as $index => $mapping) {
+      $mapping_key = $mapping['webform_field'] . '->' . $mapping['entity'] . '.' . $mapping['field'];
+      
+      if (isset($seen_mappings[$mapping_key])) {
+        $this->loggerFactory->get('dataverse_webform')->warning(
+          'Duplicate field mapping detected: @mapping',
+          ['@mapping' => $mapping_key]
+        );
+      } else {
+        $seen_mappings[$mapping_key] = $index;
+      }
     }
   }
 

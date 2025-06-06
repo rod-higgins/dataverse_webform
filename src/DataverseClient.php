@@ -275,9 +275,17 @@ class DataverseClient implements DataverseClientInterface {
   protected function createSingleEntityWithErrorHandling(array $config, string $entity_name, array $entity_data): array {
     try {
       $result = $this->createEntity($config, $entity_name, $entity_data);
-      return ['success' => true, 'id' => $result['id'] ?? null, 'data' => $result];
+      return [
+        'success' => true, 
+        'id' => $result['id'] ?? null, 
+        'data' => $result
+      ];
     } catch (DataverseException $e) {
-      return ['success' => false, 'error' => $e->getMessage()];
+      return [
+        'success' => false, 
+        'error' => $e->getMessage(),
+        'error_code' => $e->getDataverseErrorCode(),
+      ];
     }
   }
 
@@ -325,7 +333,7 @@ class DataverseClient implements DataverseClientInterface {
 
   protected function validateResponseStatus(ResponseInterface $response, string $error_context): void {
     if (!$this->isSuccessResponse($response)) {
-      throw new DataverseException($error_context . ': HTTP ' . $response->getStatusCode());
+      throw DataverseException::fromHttpResponse($response, $error_context);
     }
   }
 
@@ -403,16 +411,18 @@ class DataverseClient implements DataverseClientInterface {
     $data = json_decode($content, true);
     
     if (json_last_error() !== JSON_ERROR_NONE) {
-      throw new DataverseException('Invalid JSON response from Dataverse');
+      throw new DataverseException('Invalid JSON response from Dataverse: ' . json_last_error_msg());
     }
     
     return $data;
   }
 
   protected function isValidFieldAttribute(array $attribute): bool {
+    $invalid_types = ['Virtual', 'EntityName', 'PartyList'];
+    
     return !empty($attribute['IsValidForCreate']['Value']) &&
            !empty($attribute['IsCustomizable']['Value']) &&
-           !in_array($attribute['AttributeType'], ['Virtual', 'EntityName', 'PartyList']);
+           !in_array($attribute['AttributeType'], $invalid_types);
   }
 
   protected function parseEntityCreationResponse(ResponseInterface $response): array {
@@ -471,6 +481,7 @@ class DataverseClient implements DataverseClientInterface {
     return $this->httpClientFactory->fromOptions([
       'base_uri' => rtrim($config['dataverse_url'], '/') . '/api/data/' . self::API_VERSION . '/',
       'timeout' => $config['timeout'] ?? self::DEFAULT_TIMEOUT,
+      'connect_timeout' => 10,
     ]);
   }
 
