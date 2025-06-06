@@ -263,28 +263,14 @@ function dataverse_webform_update_8002() {
  * FIXED: Replaced direct SQL query with proper cache invalidation.
  */
 function dataverse_webform_update_8003() {
+  // Use proper Drupal cache invalidation instead of direct SQL
   $cache_backend = \Drupal::cache('default');
+  $cache_backend->invalidateAll();
   
-  // Use proper cache tag invalidation instead of direct SQL
-  $cache_backend->invalidateTags(['dataverse_webform']);
+  // Clear specific Dataverse cache tags
+  \Drupal::service('cache_tags.invalidator')->invalidateTags(['dataverse_webform']);
   
-  // Also invalidate specific cache patterns using cache tag invalidation
-  $cache_tags_to_invalidate = [
-    'dataverse_webform:entities',
-    'dataverse_webform:fields',
-    'dataverse_webform:config',
-    'dataverse_webform:metadata',
-  ];
-  
-  foreach ($cache_tags_to_invalidate as $tag) {
-    $cache_backend->invalidateTags([$tag]);
-  }
-  
-  // Clear any remaining module-specific cache entries safely
-  $cache_service = \Drupal::service('cache_tags.invalidator');
-  $cache_service->invalidateTags(['dataverse_webform']);
-  
-  return t('Cleared cached Dataverse metadata entries using proper cache invalidation. Entity and field information will be refreshed on next access.');
+  return t('Cleared cached Dataverse metadata entries using proper cache invalidation.');
 }
 
 /**

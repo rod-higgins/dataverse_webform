@@ -670,4 +670,128 @@ class WebformSettingsFormBuilder {
     return FALSE;
   }
 
+  public function loadEntityFieldsAjax(array &$form, FormStateInterface $form_state): array {
+  $triggering_element = $form_state->getTriggeringElement();
+  $webform_field = $triggering_element['#attributes']['data-webform-field'] ?? '';
+  
+  if (empty($webform_field)) {
+    return $form['third_party_settings']['dataverse_webform']['config_container']['field_mappings_config']['field_mappings'][$webform_field]['field'] ?? [];
+  }
+
+  $entity_name = $form_state->getValue([
+    'third_party_settings', 
+    'dataverse_webform', 
+    'config_container', 
+    'field_mappings_config', 
+    'field_mappings', 
+    $webform_field, 
+    'entity'
+  ]);
+
+  $field_element = &$form['third_party_settings']['dataverse_webform']['config_container']['field_mappings_config']['field_mappings'][$webform_field]['field'];
+  
+  if (!empty($entity_name)) {
+    try {
+      // Build minimal config for entity fields request
+      $config = $this->buildConfigFromFormState($form_state);
+      $fields = $this->dataverseClient->getEntityFields($config, $entity_name);
+      
+      $field_options = ['' => $this->t('- Select Field -')];
+      foreach ($fields as $field_name => $field_data) {
+        $field_options[$field_name] = $field_data['display_name'] . ' (' . $field_name . ')';
+      }
+      
+      $field_element['#options'] = $field_options;
+      
+    } catch (DataverseException $e) {
+      $field_element['#options'] = ['' => $this->t('Error loading fields: @error', ['@error' => $e->getMessage()])];
+    }
+  }
+
+  return $field_element;
+}
+
+public function testConnectionAjax(array &$form, FormStateInterface $form_state): array {
+  $config = $this->buildConfigFromFormState($form_state);
+  
+  $results_element = &$form['third_party_settings']['dataverse_webform']['config_container']['testing']['test_results'];
+  
+  try {
+    $connection_success = $this->dataverseClient->testConnection($config);
+    
+    if ($connection_success) {
+      $results_element['#markup'] = '<div class="messages messages--status">' . 
+        $this->t('✅ Connection successful! Azure AD authentication and Dataverse access verified.') . 
+        '</div>';
+    } else {
+      $results_element['#markup'] = '<div class="messages messages--error">' . 
+        $this->t('❌ Connection failed. Please check your configuration.') . 
+        '</div>';
+    }
+    
+  } catch (DataverseException $e) {
+    $results_element['#markup'] = '<div class="messages messages--error">' . 
+      $this->t('❌ Connection test failed: @error', ['@error' => $e->getMessage()]) . 
+      '</div>';
+  }
+
+  return $results_element;
+}
+
+public function loadEntitiesAjax(array &$form, FormStateInterface $form_state): array {
+  $config = $this->buildConfigFromFormState($form_state);
+  
+  $entities_element = &$form['third_party_settings']['dataverse_webform']['config_container']['testing']['entities_container'];
+  
+  try {
+    $entities = $this->dataverseClient->getEntities($config);
+    
+    if (!empty($entities)) {
+      $entity_list = [];
+      foreach (array_slice($entities, 0, 10) as $entity) {
+        $entity_list[] = $entity['display_name'] . ' (' . $entity['logical_name'] . ')';
+      }
+      
+      $more_count = count($entities) - 10;
+      $list_markup = '<ul><li>' . implode('</li><li>', $entity_list) . '</li></ul>';
+      
+      if ($more_count > 0) {
+        $list_markup .= '<p><em>' . $this->t('...and @count more entities', ['@count' => $more_count]) . '</em></p>';
+      }
+      
+      $entities_element['#markup'] = '<div class="messages messages--status">' . 
+        $this->t('✅ Successfully loaded @count entities:', ['@count' => count($entities)]) . 
+        $list_markup . '</div>';
+    } else {
+      $entities_element['#markup'] = '<div class="messages messages--warning">' . 
+        $this->t('⚠️ No entities found. This may indicate permission restrictions.') . 
+        '</div>';
+    }
+    
+  } catch (DataverseException $e) {
+    $entities_element['#markup'] = '<div class="messages messages--error">' . 
+      $this->t('❌ Failed to load entities: @error', ['@error' => $e->getMessage()]) . 
+      '</div>';
+  }
+
+  return $entities_element;
+}
+
+/**
+ * Helper method to build config from form state for AJAX operations.
+ */
+protected function buildConfigFromFormState(FormStateInterface $form_state): array {
+  $values = $form_state->getValues();
+  $config_values = $values['third_party_settings']['dataverse_webform']['config_container'] ?? [];
+  
+  return [
+    'enabled' => TRUE,
+    'azure_tenant_id' => $config_values['azure_config']['azure_tenant_id'] ?? '',
+    'azure_client_id_key' => $config_values['azure_config']['azure_client_id_key'] ?? '',
+    'azure_client_secret_key' => $config_values['azure_config']['azure_client_secret_key'] ?? '',
+    'dataverse_url' => $config_values['dataverse_config']['dataverse_url'] ?? '',
+    'timeout' => $config_values['advanced_config']['timeout'] ?? 30,
+  ];
+}
+
 }

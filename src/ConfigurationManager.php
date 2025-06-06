@@ -52,6 +52,34 @@ class ConfigurationManager {
     return $key_options;
   }
 
+  public function getKeyValue(string $key_id): ?string {
+    if (empty($key_id)) {
+        return NULL;
+    }
+
+    if (!$this->validateKeyAccess($key_id)) {
+        throw new DataverseException("Access denied for key: {$key_id}");
+    }
+
+    try {
+        $key = $this->keyRepository->getKey($key_id);
+        if (!$key) {
+        return NULL;
+        }
+
+        $value = $key->getKeyValue();
+        return !empty($value) ? $value : NULL;
+        
+    } catch (\Exception $e) {
+        $this->loggerFactory->get('dataverse_webform')->error(
+        'Failed to retrieve key @key: @error',
+        ['@key' => $key_id, '@error' => $e->getMessage()]
+        );
+        return NULL;
+    }
+  }
+
+
   /**
    * Validate that required keys exist and have values.
    *
@@ -220,6 +248,52 @@ class ConfigurationManager {
     }
 
     return $grouped;
+  }
+
+  protected function validateKeyAccess(string $key_id): bool {
+    if (empty($key_id)) {
+        return FALSE;
+    }
+    
+    $current_user = \Drupal::currentUser();
+    if (!$current_user->hasPermission('administer dataverse webform')) {
+        return FALSE;
+    }
+    
+    $key = $this->keyRepository->getKey($key_id);
+    return $key !== NULL;
+  }
+
+  protected function performValidation(array $config): array {
+    $results = [
+        'valid' => TRUE,
+        'errors' => [],
+        'warnings' => [],
+        'key_validation' => [],
+    ];
+
+    try {
+        $this->validator->validateConfig($config);
+    } catch (\Exception $e) {
+        $results['valid'] = FALSE;
+        $results['errors'][] = $e->getMessage();
+    }
+
+    // Validate keys exist and have values
+    $key_results = $this->validateRequiredKeys($config);
+    $results['key_validation'] = $key_results;
+
+    foreach ($key_results as $key_type => $key_result) {
+        if (!$key_result['exists']) {
+        $results['errors'][] = "Key for {$key_type} does not exist";
+        $results['valid'] = FALSE;
+        } elseif (!$key_result['has_value']) {
+        $results['errors'][] = "Key for {$key_type} has no value";
+        $results['valid'] = FALSE;
+        }
+    }
+
+    return $results;
   }
 
   /**
