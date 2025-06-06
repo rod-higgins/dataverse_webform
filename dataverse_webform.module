@@ -2,7 +2,7 @@
 
 /**
  * @file
- * Main module file for Dataverse Webform Integration with multi-entity support.
+ * Main module file for Dataverse Webform Integration.
  */
 
 use Drupal\Core\Form\FormStateInterface;
@@ -12,7 +12,6 @@ use Drupal\webform\WebformSubmissionInterface;
  * Implements hook_webform_submission_insert().
  */
 function dataverse_webform_webform_submission_insert(WebformSubmissionInterface $webform_submission) {
-  /** @var \Drupal\dataverse_webform\WebformSubmissionHandler $handler */
   $handler = \Drupal::service('dataverse_webform.submission_handler');
   $handler->processSubmission($webform_submission);
 }
@@ -21,7 +20,6 @@ function dataverse_webform_webform_submission_insert(WebformSubmissionInterface 
  * Implements hook_form_FORM_ID_alter() for webform admin form.
  */
 function dataverse_webform_form_webform_admin_form_alter(&$form, FormStateInterface $form_state, $form_id) {
-  /** @var \Drupal\dataverse_webform\Form\WebformSettingsFormBuilder $form_builder */
   $form_builder = \Drupal::service('dataverse_webform.form_builder');
   $form_builder->buildWebformSettingsForm($form, $form_state);
 }
@@ -45,9 +43,8 @@ function dataverse_webform_theme() {
  * Implements hook_help().
  */
 function dataverse_webform_help($route_name, \Drupal\Core\Routing\RouteMatchInterface $route_match) {
-  switch ($route_name) {
-    case 'help.page.dataverse_webform':
-      return '<p>' . t('The Dataverse Webform Integration module allows you to automatically submit webform data to Microsoft Dataverse.') . '</p>';
+  if ($route_name === 'help.page.dataverse_webform') {
+    return '<p>' . t('The Dataverse Webform Integration module allows you to automatically submit webform data to Microsoft Dataverse.') . '</p>';
   }
   return '';
 }

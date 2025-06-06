@@ -38,7 +38,7 @@
         Drupal.dataverseAdmin.initConfigValidation(context);
       }
 
-      // Initialize tooltips for field information
+      // Initialize tooltips
       $('.field-info-tooltip', context).once('dataverse-tooltip').tooltip({
         placement: 'top',
         trigger: 'hover'
@@ -55,9 +55,10 @@
      * Auto-map a webform field to suggested Dataverse fields.
      */
     autoMapField: function (webformField, rowIndex) {
-      var entitySelect = $('[data-row-index="' + rowIndex + '"] select[name*="[entity]"]');
-      var fieldSelect = $('[data-row-index="' + rowIndex + '"] select[name*="[field]"]');
-      var transformSelect = $('[data-row-index="' + rowIndex + '"] select[name*="[transform]"]');
+      var $row = $('[data-row-index="' + rowIndex + '"]');
+      var entitySelect = $row.find('select[name*="[entity]"]');
+      var fieldSelect = $row.find('select[name*="[field]"]');
+      var transformSelect = $row.find('select[name*="[transform]"]');
       
       var entityName = entitySelect.val();
       if (!entityName) {
@@ -65,19 +66,16 @@
         return;
       }
 
-      // Show loading state
       var $button = $('[data-webform-field="' + webformField + '"][data-row-index="' + rowIndex + '"]');
       var originalText = $button.val();
       $button.val('Mapping...').prop('disabled', true);
 
-      // Get field suggestions
       var suggestions = Drupal.dataverseAdmin.getFieldSuggestions(webformField, entityName);
       
       if (suggestions.length > 0) {
         var bestMatch = suggestions[0];
         fieldSelect.val(bestMatch.field);
         
-        // Auto-select appropriate transform
         var suggestedTransform = Drupal.dataverseAdmin.suggestTransform(webformField, bestMatch.field);
         if (suggestedTransform) {
           transformSelect.val(suggestedTransform);
@@ -94,7 +92,6 @@
         );
       }
 
-      // Restore button state
       setTimeout(function () {
         $button.val(originalText).prop('disabled', false);
       }, 1000);
@@ -104,8 +101,6 @@
      * Load field suggestions for a specific entity.
      */
     loadFieldSuggestions: function (entityName, webformField, rowIndex) {
-      // This would typically make an AJAX call to get suggestions
-      // For now, we'll use client-side logic
       console.log('Loading field suggestions for entity:', entityName, 'field:', webformField);
     },
 
@@ -113,7 +108,6 @@
      * Get field mapping suggestions based on field names.
      */
     getFieldSuggestions: function (webformField, entityName) {
-      // Common field mappings
       var commonMappings = {
         'first_name': { targets: ['firstname', 'fname'], confidence: 90 },
         'last_name': { targets: ['lastname', 'lname', 'surname'], confidence: 90 },
@@ -159,7 +153,6 @@
         }
       }
 
-      // Sort by confidence
       suggestions.sort(function (a, b) {
         return b.confidence - a.confidence;
       });
@@ -174,34 +167,22 @@
       var webformLower = webformField.toLowerCase();
       var dataverseLower = dataverseField.toLowerCase();
 
-      // Email fields
-      if (webformLower.indexOf('email') !== -1 || dataverseLower.indexOf('email') !== -1) {
-        return 'email';
+      var transformMappings = [
+        {pattern: 'email', transform: 'email'},
+        {pattern: 'phone|telephone', transform: 'phone'},
+        {pattern: 'date', transform: 'date'},
+        {pattern: 'url|website', transform: 'url'},
+        {pattern: '^(is|has|do)', transform: 'boolean'}
+      ];
+
+      for (var i = 0; i < transformMappings.length; i++) {
+        var mapping = transformMappings[i];
+        var regex = new RegExp(mapping.pattern);
+        if (regex.test(webformLower) || regex.test(dataverseLower)) {
+          return mapping.transform;
+        }
       }
 
-      // Phone fields
-      if (webformLower.indexOf('phone') !== -1 || dataverseLower.indexOf('telephone') !== -1) {
-        return 'phone';
-      }
-
-      // Date fields
-      if (webformLower.indexOf('date') !== -1 || dataverseLower.indexOf('date') !== -1) {
-        return 'date';
-      }
-
-      // URL fields
-      if (webformLower.indexOf('url') !== -1 || webformLower.indexOf('website') !== -1 || 
-          dataverseLower.indexOf('url') !== -1 || dataverseLower.indexOf('website') !== -1) {
-        return 'url';
-      }
-
-      // Boolean fields
-      if (webformLower.indexOf('is') === 0 || webformLower.indexOf('has') === 0 || 
-          webformLower.indexOf('do') === 0 || dataverseLower.indexOf('donot') !== -1) {
-        return 'boolean';
-      }
-
-      // Default to string
       return 'string';
     },
 
@@ -212,7 +193,6 @@
       var $form = $('#webform-admin-form', context);
       var validationTimer;
 
-      // Add real-time validation
       $form.find('input, select', context).once('dataverse-validation').on('change blur', function () {
         clearTimeout(validationTimer);
         validationTimer = setTimeout(function () {
@@ -231,31 +211,28 @@
         return;
       }
 
-      // Basic validation
       var errors = [];
       var warnings = [];
 
-      if (!config.azure_tenant_id) {
-        errors.push('Azure Tenant ID is required');
-      } else if (!Drupal.dataverseAdmin.isValidGuid(config.azure_tenant_id)) {
-        errors.push('Azure Tenant ID must be in GUID format');
-      }
+      var validationRules = [
+        {field: 'azure_tenant_id', required: true, pattern: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, message: 'Azure Tenant ID must be in GUID format'},
+        {field: 'dataverse_url', required: true, pattern: /^https:\/\//, message: 'Dataverse URL should use HTTPS'},
+        {field: 'azure_client_id_key', required: true, message: 'Azure Client ID Key is required'},
+        {field: 'azure_client_secret_key', required: true, message: 'Azure Client Secret Key is required'}
+      ];
 
-      if (!config.dataverse_url) {
-        errors.push('Dataverse URL is required');
-      } else if (!config.dataverse_url.startsWith('https://')) {
-        warnings.push('Dataverse URL should use HTTPS');
-      }
+      validationRules.forEach(function(rule) {
+        if (rule.required && !config[rule.field]) {
+          errors.push(rule.message || rule.field + ' is required');
+        } else if (config[rule.field] && rule.pattern && !rule.pattern.test(config[rule.field])) {
+          if (rule.field === 'dataverse_url') {
+            warnings.push(rule.message);
+          } else {
+            errors.push(rule.message);
+          }
+        }
+      });
 
-      if (!config.azure_client_id_key) {
-        errors.push('Azure Client ID Key is required');
-      }
-
-      if (!config.azure_client_secret_key) {
-        errors.push('Azure Client Secret Key is required');
-      }
-
-      // Display validation results
       Drupal.dataverseAdmin.displayValidationResults(errors, warnings);
     },
 
@@ -276,7 +253,6 @@
      * Display validation results.
      */
     displayValidationResults: function (errors, warnings) {
-      // Remove existing validation messages
       $('.dataverse-validation-message').remove();
 
       var $container = $('#edit-third-party-settings-dataverse-webform');
@@ -303,14 +279,6 @@
     },
 
     /**
-     * Check if a string is a valid GUID.
-     */
-    isValidGuid: function (guid) {
-      var guidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-      return guidRegex.test(guid);
-    },
-
-    /**
      * Show a temporary message.
      */
     showMessage: function (message, type) {
@@ -332,7 +300,6 @@
      * Highlight form elements with validation issues.
      */
     highlightValidationIssues: function (issues) {
-      // Remove existing highlights
       $('.form-item').removeClass('has-error has-warning');
 
       issues.forEach(function (issue) {
@@ -354,8 +321,6 @@
   Drupal.AjaxCommands.prototype.dataverseUpdateSuggestions = function (ajax, response, status) {
     var $target = $(response.selector);
     $target.html(response.data);
-    
-    // Re-attach behaviors
     Drupal.attachBehaviors($target[0]);
   };
 
