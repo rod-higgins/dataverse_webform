@@ -5,6 +5,9 @@ namespace Drupal\dataverse_webform;
 use Drupal\Core\Http\ClientFactory;
 use Drupal\Core\Logger\LoggerChannelFactoryInterface;
 use Drupal\Core\Cache\CacheBackendInterface;
+use Drupal\Core\Config\ConfigFactoryInterface;
+use Drupal\Core\State\StateInterface;
+use Drupal\Core\Session\AccountProxyInterface;
 use Drupal\webform\WebformSubmissionInterface;
 use Drupal\dataverse_webform\Exception\DataverseException;
 use GuzzleHttp\Exception\RequestException;
@@ -31,6 +34,16 @@ class DataverseClient implements DataverseClientInterface {
    * Default request timeout in seconds.
    */
   public const DEFAULT_TIMEOUT = 30;
+
+  /**
+   * Default rate limit requests per hour.
+   */
+  public const DEFAULT_RATE_LIMIT = 100;
+
+  /**
+   * Memory usage threshold for large form processing (128MB).
+   */
+  public const MEMORY_THRESHOLD = 134217728;
 
   /**
    * The HTTP client factory.
@@ -63,6 +76,21 @@ class DataverseClient implements DataverseClientInterface {
   protected SubmissionProcessor $submissionProcessor;
 
   /**
+   * The config factory.
+   */
+  protected ConfigFactoryInterface $configFactory;
+
+  /**
+   * The state service.
+   */
+  protected StateInterface $state;
+
+  /**
+   * The current user.
+   */
+  protected AccountProxyInterface $currentUser;
+
+  /**
    * Constructs a DataverseClient object.
    *
    * @param \Drupal\Core\Http\ClientFactory $http_client_factory
@@ -77,6 +105,12 @@ class DataverseClient implements DataverseClientInterface {
    *   The validation service.
    * @param \Drupal\dataverse_webform\SubmissionProcessor $submission_processor
    *   The submission processor service.
+   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
+   *   The config factory.
+   * @param \Drupal\Core\State\StateInterface $state
+   *   The state service.
+   * @param \Drupal\Core\Session\AccountProxyInterface $current_user
+   *   The current user.
    */
   public function __construct(
     ClientFactory $http_client_factory,
@@ -84,7 +118,10 @@ class DataverseClient implements DataverseClientInterface {
     AzureAdAuthService $azure_auth,
     CacheBackendInterface $cache,
     ValidationService $validator,
-    SubmissionProcessor $submission_processor
+    SubmissionProcessor $submission_processor,
+    ConfigFactoryInterface $config_factory,
+    StateInterface $state,
+    AccountProxyInterface $current_user
   ) {
     $this->httpClientFactory = $http_client_factory;
     $this->loggerFactory = $logger_factory;
@@ -92,6 +129,9 @@ class DataverseClient implements DataverseClientInterface {
     $this->cache = $cache;
     $this->validator = $validator;
     $this->submissionProcessor = $submission_processor;
+    $this->configFactory = $config_factory;
+    $this->state = $state;
+    $this->currentUser = $current_user;
   }
 
   /**
@@ -99,14 +139,17 @@ class DataverseClient implements DataverseClientInterface {
    */
   public function submitToDataverse(WebformSubmissionInterface $submission, array $config): array {
     try {
+      // Check rate limit before processing
+      $this->checkRateLimit();
+
       // Validate configuration
       $this->validator->validateConfig($config);
 
       // Get submission data
       $submission_data = $submission->getData();
       
-      // Process field mappings to group by entity
-      $entities_data = $this->submissionProcessor->processFieldMappings(
+      // Process field mappings to group by entity with memory monitoring
+      $entities_data = $this->processFieldMappingsWithMemoryCheck(
         $submission_data, 
         $config['field_mappings'] ?? []
       );
@@ -175,6 +218,9 @@ class DataverseClient implements DataverseClientInterface {
         }
       }
 
+      // Record successful API call for rate limiting
+      $this->recordApiCall();
+
       return $results;
 
     } catch (\Exception $e) {
@@ -194,11 +240,14 @@ class DataverseClient implements DataverseClientInterface {
    */
   public function testConnection(array $config): bool {
     try {
+      // Check rate limit
+      $this->checkRateLimit();
+
       $this->validator->validateConfig($config);
       
       $access_token = $this->azureAuth->getAccessToken($config);
       if (!$access_token) {
-        return false;
+        throw new DataverseException('Failed to obtain access token');
       }
 
       $client = $this->createHttpClient($config);
@@ -209,14 +258,20 @@ class DataverseClient implements DataverseClientInterface {
         'timeout' => 10,
       ]);
 
-      return $response->getStatusCode() === 200;
+      $success = $response->getStatusCode() === 200;
+      
+      if ($success) {
+        $this->recordApiCall();
+      }
+
+      return $success;
 
     } catch (\Exception $e) {
       $this->loggerFactory->get('dataverse_webform')->error(
         'Dataverse connection test failed: @error',
         ['@error' => $e->getMessage()]
       );
-      return false;
+      throw new DataverseException('Connection test failed: ' . $e->getMessage(), 0, $e);
     }
   }
 
@@ -224,14 +279,22 @@ class DataverseClient implements DataverseClientInterface {
    * {@inheritdoc}
    */
   public function getEntities(array $config): array {
-    $cache_key = 'dataverse_webform:entities:' . md5(serialize($config));
-    $cached = $this->cache->get($cache_key);
+    // Generate cache key based on relevant config only
+    $cache_config = array_intersect_key($config, array_flip([
+      'dataverse_url', 
+      'azure_tenant_id'
+    ]));
+    $cache_key = 'dataverse_webform:entities:' . hash('sha256', json_encode($cache_config));
     
+    $cached = $this->cache->get($cache_key);
     if ($cached && $cached->data) {
       return $cached->data;
     }
 
     try {
+      // Check rate limit
+      $this->checkRateLimit();
+
       $this->validator->validateConfig($config);
       
       $access_token = $this->azureAuth->getAccessToken($config);
@@ -281,8 +344,18 @@ class DataverseClient implements DataverseClientInterface {
           }
         }
 
-        // Cache for 1 hour
-        $this->cache->set($cache_key, $entities, time() + 3600);
+        // Cache with proper tags for selective invalidation
+        $cache_tags = [
+          'dataverse_webform:entities',
+          'dataverse_webform:config:' . hash('sha256', $config['dataverse_url']),
+          'dataverse_webform:metadata',
+        ];
+        
+        $this->cache->set($cache_key, $entities, time() + 3600, $cache_tags);
+        
+        // Record successful API call
+        $this->recordApiCall();
+        
         return $entities;
       }
 
@@ -301,14 +374,22 @@ class DataverseClient implements DataverseClientInterface {
   public function getEntityFields(array $config, string $entity_name): array {
     $this->validator->validateEntityName($entity_name);
     
-    $cache_key = 'dataverse_webform:fields:' . $entity_name . ':' . md5(serialize($config));
-    $cached = $this->cache->get($cache_key);
+    // Generate cache key with entity-specific information
+    $cache_config = array_intersect_key($config, array_flip([
+      'dataverse_url', 
+      'azure_tenant_id'
+    ]));
+    $cache_key = 'dataverse_webform:fields:' . $entity_name . ':' . hash('sha256', json_encode($cache_config));
     
+    $cached = $this->cache->get($cache_key);
     if ($cached && $cached->data) {
       return $cached->data;
     }
 
     try {
+      // Check rate limit
+      $this->checkRateLimit();
+
       $this->validator->validateConfig($config);
       
       $access_token = $this->azureAuth->getAccessToken($config);
@@ -364,8 +445,19 @@ class DataverseClient implements DataverseClientInterface {
         // Sort by display name
         uasort($fields, fn($a, $b) => strcmp($a['display_name'], $b['display_name']));
 
-        // Cache for 1 hour
-        $this->cache->set($cache_key, $fields, time() + 3600);
+        // Cache with proper tags
+        $cache_tags = [
+          'dataverse_webform:fields',
+          'dataverse_webform:fields:' . $entity_name,
+          'dataverse_webform:config:' . hash('sha256', $config['dataverse_url']),
+          'dataverse_webform:metadata',
+        ];
+        
+        $this->cache->set($cache_key, $fields, time() + 3600, $cache_tags);
+        
+        // Record successful API call
+        $this->recordApiCall();
+        
         return $fields;
       }
 
@@ -386,6 +478,9 @@ class DataverseClient implements DataverseClientInterface {
     $this->validator->validateEntityData($data);
 
     try {
+      // Check rate limit
+      $this->checkRateLimit();
+
       $access_token = $this->azureAuth->getAccessToken($config);
       if (!$access_token) {
         throw new DataverseException('Failed to get access token');
@@ -409,6 +504,9 @@ class DataverseClient implements DataverseClientInterface {
         if (preg_match('/\(([^)]+)\)$/', $location, $matches)) {
           $entity_id = $matches[1];
         }
+
+        // Record successful API call
+        $this->recordApiCall();
 
         return [
           'id' => $entity_id,
@@ -492,6 +590,91 @@ class DataverseClient implements DataverseClientInterface {
     }
 
     return $validation_results;
+  }
+
+  /**
+   * Check rate limit for current user.
+   *
+   * @throws \Drupal\dataverse_webform\Exception\DataverseException
+   *   When rate limit is exceeded.
+   */
+  protected function checkRateLimit(): void {
+    $config = $this->configFactory->get('dataverse_webform.settings');
+    $rate_limit_enabled = $config->get('rate_limit_enabled');
+    
+    if (!$rate_limit_enabled) {
+      return;
+    }
+
+    $max_requests = $config->get('rate_limit_requests_per_hour') ?? self::DEFAULT_RATE_LIMIT;
+    $rate_limit_key = 'dataverse_webform:rate_limit:' . $this->currentUser->id();
+    $requests = $this->state->get($rate_limit_key, []);
+    
+    // Clean old requests (older than 1 hour)
+    $current_time = time();
+    $requests = array_filter($requests, fn($time) => $time > ($current_time - 3600));
+    
+    if (count($requests) >= $max_requests) {
+      throw DataverseException::validationError(
+        "Rate limit exceeded: {$max_requests} requests per hour",
+        ['user_id' => $this->currentUser->id(), 'requests_count' => count($requests)]
+      );
+    }
+  }
+
+  /**
+   * Record an API call for rate limiting purposes.
+   */
+  protected function recordApiCall(): void {
+    $config = $this->configFactory->get('dataverse_webform.settings');
+    $rate_limit_enabled = $config->get('rate_limit_enabled');
+    
+    if (!$rate_limit_enabled) {
+      return;
+    }
+
+    $rate_limit_key = 'dataverse_webform:rate_limit:' . $this->currentUser->id();
+    $requests = $this->state->get($rate_limit_key, []);
+    
+    // Clean old requests and add current one
+    $current_time = time();
+    $requests = array_filter($requests, fn($time) => $time > ($current_time - 3600));
+    $requests[] = $current_time;
+    
+    $this->state->set($rate_limit_key, $requests);
+  }
+
+  /**
+   * Process field mappings with memory monitoring.
+   *
+   * @param array $submission_data
+   *   The webform submission data.
+   * @param array $field_mappings
+   *   The field mapping configuration.
+   *
+   * @return array
+   *   Array of entity data grouped by entity name.
+   */
+  protected function processFieldMappingsWithMemoryCheck(array $submission_data, array $field_mappings): array {
+    // Check memory usage before processing large datasets
+    if (memory_get_usage() > self::MEMORY_THRESHOLD) {
+      $this->loggerFactory->get('dataverse_webform')->warning(
+        'High memory usage detected before field mapping processing: @memory',
+        ['@memory' => memory_get_usage(true)]
+      );
+    }
+
+    $entities_data = $this->submissionProcessor->processFieldMappings($submission_data, $field_mappings);
+
+    // Monitor memory after processing
+    if (memory_get_usage() > self::MEMORY_THRESHOLD) {
+      $this->loggerFactory->get('dataverse_webform')->warning(
+        'High memory usage detected after field mapping processing: @memory',
+        ['@memory' => memory_get_usage(true)]
+      );
+    }
+
+    return $entities_data;
   }
 
   /**

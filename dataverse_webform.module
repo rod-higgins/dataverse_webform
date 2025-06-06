@@ -13,6 +13,11 @@ use Drupal\Core\Ajax\InvokeCommand;
 use Drupal\dataverse_webform\Exception\DataverseException;
 
 /**
+ * Memory usage threshold for large form processing (128MB).
+ */
+const DATAVERSE_WEBFORM_MEMORY_THRESHOLD = 134217728;
+
+/**
  * Implements hook_webform_submission_insert().
  */
 function dataverse_webform_webform_submission_insert(WebformSubmissionInterface $webform_submission) {
@@ -27,29 +32,8 @@ function dataverse_webform_webform_submission_insert(WebformSubmissionInterface 
       $results = $dataverse_service->submitToDataverse($webform_submission, $dataverse_config);
       
       // Log submission results
-      $logger = \Drupal::logger('dataverse_webform');
-      foreach ($results as $entity_name => $result) {
-        if ($result['success']) {
-          $logger->info(
-            'Successfully submitted webform @webform_id submission @submission_id to Dataverse entity @entity',
-            [
-              '@webform_id' => $webform->id(),
-              '@submission_id' => $webform_submission->id(),
-              '@entity' => $entity_name,
-            ]
-          );
-        } else {
-          $logger->error(
-            'Failed to submit webform @webform_id submission @submission_id to Dataverse entity @entity: @error',
-            [
-              '@webform_id' => $webform->id(),
-              '@submission_id' => $webform_submission->id(),
-              '@entity' => $entity_name,
-              '@error' => $result['error'] ?? 'Unknown error',
-            ]
-          );
-        }
-      }
+      dataverse_webform_log_submission_results($webform, $webform_submission, $results);
+      
     } catch (\Exception $e) {
       \Drupal::logger('dataverse_webform')->error(
         'Failed to process Dataverse submission for webform @webform_id: @error',
@@ -72,6 +56,32 @@ function dataverse_webform_form_webform_admin_form_alter(&$form, FormStateInterf
   // Get configuration manager service
   $config_manager = \Drupal::service('dataverse_webform.config_manager');
   
+  // Build the main Dataverse integration section
+  dataverse_webform_build_main_section($form, $webform, $config_manager);
+  
+  // Build configuration sections
+  dataverse_webform_build_azure_config_section($form, $webform, $config_manager);
+  dataverse_webform_build_dataverse_config_section($form, $webform);
+  dataverse_webform_build_advanced_config_section($form, $webform);
+  
+  // Build field mapping section
+  dataverse_webform_build_field_mapping_section($form, $form_state, $webform, $config_manager);
+  
+  // Add validation and submit handlers
+  $form['#validate'][] = 'dataverse_webform_admin_form_validate';
+  $form['actions']['submit']['#submit'][] = 'dataverse_webform_admin_form_submit';
+  
+  // Add JavaScript for dynamic field mapping
+  $form['#attached']['library'][] = 'dataverse_webform/admin';
+}
+
+/**
+ * Build the main Dataverse integration section.
+ */
+function dataverse_webform_build_main_section(&$form, $webform, $config_manager) {
+  $dataverse_config = $webform->getThirdPartySetting('dataverse_webform', 'dataverse_config', []);
+  $dataverse_config = $config_manager->mergeWithDefaults($dataverse_config);
+
   $form['third_party_settings']['dataverse_webform'] = [
     '#type' => 'details',
     '#title' => t('Dataverse Integration'),
@@ -80,17 +90,21 @@ function dataverse_webform_form_webform_admin_form_alter(&$form, FormStateInterf
     '#tree' => TRUE,
   ];
   
-  $dataverse_config = $webform->getThirdPartySetting('dataverse_webform', 'dataverse_config', []);
-  $dataverse_config = $config_manager->mergeWithDefaults($dataverse_config);
-  
   $form['third_party_settings']['dataverse_webform']['enabled'] = [
     '#type' => 'checkbox',
     '#title' => t('Enable Dataverse integration'),
     '#description' => t('Enable automatic submission of webform data to Microsoft Dataverse.'),
     '#default_value' => $dataverse_config['enabled'] ?? FALSE,
   ];
-  
-  // Azure AD Configuration
+}
+
+/**
+ * Build the Azure AD configuration section.
+ */
+function dataverse_webform_build_azure_config_section(&$form, $webform, $config_manager) {
+  $dataverse_config = $webform->getThirdPartySetting('dataverse_webform', 'dataverse_config', []);
+  $dataverse_config = $config_manager->mergeWithDefaults($dataverse_config);
+
   $form['third_party_settings']['dataverse_webform']['azure_config'] = [
     '#type' => 'details',
     '#title' => t('Azure AD Configuration'),
@@ -151,8 +165,14 @@ function dataverse_webform_form_webform_admin_form_alter(&$form, FormStateInterf
       ],
     ],
   ];
-  
-  // Dataverse Configuration
+}
+
+/**
+ * Build the Dataverse configuration section.
+ */
+function dataverse_webform_build_dataverse_config_section(&$form, $webform) {
+  $dataverse_config = $webform->getThirdPartySetting('dataverse_webform', 'dataverse_config', []);
+
   $form['third_party_settings']['dataverse_webform']['dataverse_config'] = [
     '#type' => 'details',
     '#title' => t('Dataverse Configuration'),
@@ -180,8 +200,14 @@ function dataverse_webform_form_webform_admin_form_alter(&$form, FormStateInterf
       ],
     ],
   ];
-  
-  // Advanced Configuration
+}
+
+/**
+ * Build the advanced configuration section.
+ */
+function dataverse_webform_build_advanced_config_section(&$form, $webform) {
+  $dataverse_config = $webform->getThirdPartySetting('dataverse_webform', 'dataverse_config', []);
+
   $form['third_party_settings']['dataverse_webform']['advanced_config'] = [
     '#type' => 'details',
     '#title' => t('Advanced Configuration'),
@@ -227,8 +253,15 @@ function dataverse_webform_form_webform_admin_form_alter(&$form, FormStateInterf
     '#description' => t('Stop processing remaining entities if one entity creation fails.'),
     '#default_value' => $dataverse_config['stop_on_error'] ?? TRUE,
   ];
-  
-  // Multi-Entity Field Mapping Section
+}
+
+/**
+ * Build the field mapping section.
+ */
+function dataverse_webform_build_field_mapping_section(&$form, FormStateInterface $form_state, $webform, $config_manager) {
+  $dataverse_config = $webform->getThirdPartySetting('dataverse_webform', 'dataverse_config', []);
+  $dataverse_config = $config_manager->mergeWithDefaults($dataverse_config);
+
   $form['third_party_settings']['dataverse_webform']['field_mapping_wrapper'] = [
     '#type' => 'container',
     '#attributes' => ['id' => 'field-mapping-wrapper'],
@@ -267,26 +300,67 @@ function dataverse_webform_form_webform_admin_form_alter(&$form, FormStateInterf
   ];
   
   // Build field mapping interface
-  dataverse_webform_build_field_mapping_interface($form, $form_state, $webform, $dataverse_config);
-  
-  // Add custom validation and submit handlers
-  $form['#validate'][] = 'dataverse_webform_admin_form_validate';
-  $form['actions']['submit']['#submit'][] = 'dataverse_webform_admin_form_submit';
-  
-  // Add JavaScript for dynamic field mapping
-  $form['#attached']['library'][] = 'dataverse_webform/admin';
+  dataverse_webform_build_field_mapping_table($form, $form_state, $webform, $dataverse_config);
 }
 
 /**
- * Build the field mapping interface.
+ * Build the field mapping table interface.
  */
-function dataverse_webform_build_field_mapping_interface(&$form, FormStateInterface $form_state, $webform, $dataverse_config) {
-  // Get webform elements for mapping
-  $webform_elements = $webform->getElementsInitializedAndFlattened();
+function dataverse_webform_build_field_mapping_table(&$form, FormStateInterface $form_state, $webform, $dataverse_config) {
+  // Get webform elements for mapping with memory check
+  $webform_elements = dataverse_webform_get_webform_elements_safe($webform);
   $field_mappings = $dataverse_config['field_mappings'] ?? [];
   
   // Load available entities if configuration is complete
+  $entities = dataverse_webform_load_entities_safe($dataverse_config);
+  $entity_options = dataverse_webform_build_entity_options($entities);
+  
+  // Create field mapping table
+  dataverse_webform_build_mapping_table_structure($form, $entity_options);
+  
+  // Populate table rows
+  dataverse_webform_populate_mapping_table_rows($form, $webform_elements, $field_mappings, $entities, $dataverse_config);
+  
+  // Build submission order configuration if entities available
+  if (!empty($entities)) {
+    dataverse_webform_build_submission_order_config($form, $field_mappings, $entities, $dataverse_config);
+  }
+  
+  // Show appropriate info messages
+  dataverse_webform_show_field_mapping_messages($form, $entities, $dataverse_config);
+}
+
+/**
+ * Get webform elements safely with memory monitoring.
+ */
+function dataverse_webform_get_webform_elements_safe($webform) {
+  // Check memory before processing
+  if (memory_get_usage() > DATAVERSE_WEBFORM_MEMORY_THRESHOLD) {
+    \Drupal::logger('dataverse_webform')->warning(
+      'High memory usage detected before getting webform elements: @memory',
+      ['@memory' => memory_get_usage(true)]
+    );
+  }
+
+  $webform_elements = $webform->getElementsInitializedAndFlattened();
+  
+  // Monitor memory after processing
+  if (memory_get_usage() > DATAVERSE_WEBFORM_MEMORY_THRESHOLD) {
+    \Drupal::logger('dataverse_webform')->warning(
+      'High memory usage detected after getting webform elements: @memory',
+      ['@memory' => memory_get_usage(true)]
+    );
+  }
+
+  return $webform_elements;
+}
+
+/**
+ * Load entities safely with error handling.
+ */
+function dataverse_webform_load_entities_safe($dataverse_config) {
   $entities = [];
+  
   if (dataverse_webform_has_complete_config($dataverse_config)) {
     try {
       $dataverse_service = \Drupal::service('dataverse_webform.dataverse_client');
@@ -296,12 +370,26 @@ function dataverse_webform_build_field_mapping_interface(&$form, FormStateInterf
     }
   }
   
+  return $entities;
+}
+
+/**
+ * Build entity options array for select elements.
+ */
+function dataverse_webform_build_entity_options($entities) {
   $entity_options = ['' => t('- Select an entity -')];
+  
   foreach ($entities as $entity) {
     $entity_options[$entity['logical_name']] = $entity['display_name'] . ' (' . $entity['logical_name'] . ')';
   }
   
-  // Create field mapping table
+  return $entity_options;
+}
+
+/**
+ * Build the field mapping table structure.
+ */
+function dataverse_webform_build_mapping_table_structure(&$form, $entity_options) {
   $form['third_party_settings']['dataverse_webform']['field_mapping_wrapper']['field_mappings']['table'] = [
     '#type' => 'table',
     '#header' => [
@@ -315,8 +403,68 @@ function dataverse_webform_build_field_mapping_interface(&$form, FormStateInterf
     '#empty' => t('No webform fields available for mapping.'),
     '#tableselect' => FALSE,
   ];
+}
+
+/**
+ * Populate the field mapping table rows.
+ */
+function dataverse_webform_populate_mapping_table_rows(&$form, $webform_elements, $field_mappings, $entities, $dataverse_config) {
+  $transform_options = dataverse_webform_get_transform_options();
+  $row_count = 0;
   
-  $transform_options = [
+  foreach ($webform_elements as $element_key => $element) {
+    if (dataverse_webform_is_mappable_element($element)) {
+      // Find existing mapping for this field
+      $existing_mapping = dataverse_webform_find_existing_mapping($field_mappings, $element_key);
+      
+      // Build table row
+      dataverse_webform_build_table_row($form, $element_key, $element, $existing_mapping, $entities, $transform_options, $row_count);
+      
+      $row_count++;
+      
+      // Memory check for large forms
+      if ($row_count % 50 === 0 && memory_get_usage() > DATAVERSE_WEBFORM_MEMORY_THRESHOLD) {
+        \Drupal::logger('dataverse_webform')->warning(
+          'High memory usage during field mapping table build at row @row: @memory',
+          ['@row' => $row_count, '@memory' => memory_get_usage(true)]
+        );
+      }
+    }
+  }
+}
+
+/**
+ * Build submission order configuration.
+ */
+function dataverse_webform_build_submission_order_config(&$form, $field_mappings, $entities, $dataverse_config) {
+  $form['third_party_settings']['dataverse_webform']['field_mapping_wrapper']['submission_order'] = [
+    '#type' => 'details',
+    '#title' => t('Entity Submission Order'),
+    '#description' => t('Specify the order in which entities should be created. This is important when entities have relationships.'),
+    '#open' => FALSE,
+  ];
+  
+  $entities_in_mappings = [];
+  foreach ($field_mappings as $mapping) {
+    if (!empty($mapping['entity'])) {
+      $entities_in_mappings[$mapping['entity']] = $entities[$mapping['entity']]['display_name'] ?? $mapping['entity'];
+    }
+  }
+  
+  $form['third_party_settings']['dataverse_webform']['field_mapping_wrapper']['submission_order']['order'] = [
+    '#type' => 'checkboxes',
+    '#title' => t('Submission Order'),
+    '#description' => t('Select and order the entities for submission. Entities will be created in the order specified.'),
+    '#options' => $entities_in_mappings,
+    '#default_value' => $dataverse_config['submission_order'] ?? array_keys($entities_in_mappings),
+  ];
+}
+
+/**
+ * Get transform options for field mapping.
+ */
+function dataverse_webform_get_transform_options() {
+  return [
     'none' => t('None'),
     'string' => t('String'),
     'number' => t('Number'),
@@ -327,117 +475,103 @@ function dataverse_webform_build_field_mapping_interface(&$form, FormStateInterf
     'url' => t('URL'),
     'json' => t('JSON'),
   ];
-  
-  $row_count = 0;
-  foreach ($webform_elements as $element_key => $element) {
-    if (isset($element['#type']) && !in_array($element['#type'], ['markup', 'processed_text', 'webform_actions', 'container'])) {
-      
-      // Find existing mapping for this field
-      $existing_mapping = null;
-      foreach ($field_mappings as $index => $mapping) {
-        if (($mapping['webform_field'] ?? '') === $element_key) {
-          $existing_mapping = $mapping;
-          break;
-        }
-      }
-      
-      $form['third_party_settings']['dataverse_webform']['field_mapping_wrapper']['field_mappings']['table'][$row_count] = [
-        'webform_field' => [
-          '#type' => 'item',
-          '#title' => $element['#title'] ?? $element_key,
-          '#description' => t('Type: @type', ['@type' => $element['#type']]),
-          '#markup' => '<strong>' . ($element['#title'] ?? $element_key) . '</strong><br><small>' . $element_key . '</small>',
-        ],
-        'entity' => [
-          '#type' => 'select',
-          '#options' => $entity_options,
-          '#default_value' => $existing_mapping['entity'] ?? '',
-          '#ajax' => [
-            'callback' => 'dataverse_webform_entity_change_ajax_callback',
-            'wrapper' => "field-wrapper-{$row_count}",
-            'method' => 'replace',
-          ],
-          '#attributes' => [
-            'data-webform-field' => $element_key,
-            'data-row-index' => $row_count,
-          ],
-        ],
-        'field_wrapper' => [
-          '#type' => 'container',
-          '#attributes' => ['id' => "field-wrapper-{$row_count}"],
-        ],
-        'transform' => [
-          '#type' => 'select',
-          '#options' => $transform_options,
-          '#default_value' => $existing_mapping['transform'] ?? 'none',
-        ],
-        'required' => [
-          '#type' => 'checkbox',
-          '#default_value' => $existing_mapping['required'] ?? FALSE,
-        ],
-        'actions' => [
-          '#type' => 'button',
-          '#value' => t('Auto-map'),
-          '#attributes' => [
-            'class' => ['button--small'],
-            'data-webform-field' => $element_key,
-            'data-row-index' => $row_count,
-          ],
-        ],
-      ];
-      
-      // Load field options if entity is selected
-      $selected_entity = $existing_mapping['entity'] ?? '';
-      if (!empty($selected_entity) && !empty($entities)) {
-        $field_options = dataverse_webform_get_entity_field_options($dataverse_config, $selected_entity);
-        $form['third_party_settings']['dataverse_webform']['field_mapping_wrapper']['field_mappings']['table'][$row_count]['field_wrapper']['field'] = [
-          '#type' => 'select',
-          '#options' => $field_options,
-          '#default_value' => $existing_mapping['field'] ?? '',
-        ];
-      } else {
-        $form['third_party_settings']['dataverse_webform']['field_mapping_wrapper']['field_mappings']['table'][$row_count]['field_wrapper']['field'] = [
-          '#type' => 'select',
-          '#options' => ['' => t('- Select entity first -')],
-          '#disabled' => TRUE,
-        ];
-      }
-      
-      // Store field information for form processing
-      $form['third_party_settings']['dataverse_webform']['field_mapping_wrapper']['field_mappings']['table'][$row_count]['webform_field_key'] = [
-        '#type' => 'value',
-        '#value' => $element_key,
-      ];
-      
-      $row_count++;
+}
+
+/**
+ * Check if an element is mappable to Dataverse.
+ */
+function dataverse_webform_is_mappable_element($element) {
+  return isset($element['#type']) && 
+         !in_array($element['#type'], ['markup', 'processed_text', 'webform_actions', 'container']);
+}
+
+/**
+ * Find existing mapping for a webform field.
+ */
+function dataverse_webform_find_existing_mapping($field_mappings, $element_key) {
+  foreach ($field_mappings as $mapping) {
+    if (($mapping['webform_field'] ?? '') === $element_key) {
+      return $mapping;
     }
   }
+  return null;
+}
+
+/**
+ * Build a single table row for field mapping.
+ */
+function dataverse_webform_build_table_row(&$form, $element_key, $element, $existing_mapping, $entities, $transform_options, $row_count) {
+  $form['third_party_settings']['dataverse_webform']['field_mapping_wrapper']['field_mappings']['table'][$row_count] = [
+    'webform_field' => [
+      '#type' => 'item',
+      '#title' => $element['#title'] ?? $element_key,
+      '#description' => t('Type: @type', ['@type' => $element['#type']]),
+      '#markup' => '<strong>' . ($element['#title'] ?? $element_key) . '</strong><br><small>' . $element_key . '</small>',
+    ],
+    'entity' => [
+      '#type' => 'select',
+      '#options' => dataverse_webform_build_entity_options($entities),
+      '#default_value' => $existing_mapping['entity'] ?? '',
+      '#ajax' => [
+        'callback' => 'dataverse_webform_entity_change_ajax_callback',
+        'wrapper' => "field-wrapper-{$row_count}",
+        'method' => 'replace',
+      ],
+      '#attributes' => [
+        'data-webform-field' => $element_key,
+        'data-row-index' => $row_count,
+      ],
+    ],
+    'field_wrapper' => [
+      '#type' => 'container',
+      '#attributes' => ['id' => "field-wrapper-{$row_count}"],
+    ],
+    'transform' => [
+      '#type' => 'select',
+      '#options' => $transform_options,
+      '#default_value' => $existing_mapping['transform'] ?? 'none',
+    ],
+    'required' => [
+      '#type' => 'checkbox',
+      '#default_value' => $existing_mapping['required'] ?? FALSE,
+    ],
+    'actions' => [
+      '#type' => 'button',
+      '#value' => t('Auto-map'),
+      '#attributes' => [
+        'class' => ['button--small'],
+        'data-webform-field' => $element_key,
+        'data-row-index' => $row_count,
+      ],
+    ],
+    'webform_field_key' => [
+      '#type' => 'value',
+      '#value' => $element_key,
+    ],
+  ];
   
-  // Submission order configuration
-  if (!empty($entities)) {
-    $form['third_party_settings']['dataverse_webform']['field_mapping_wrapper']['submission_order'] = [
-      '#type' => 'details',
-      '#title' => t('Entity Submission Order'),
-      '#description' => t('Specify the order in which entities should be created. This is important when entities have relationships.'),
-      '#open' => FALSE,
+  // Load field options if entity is selected
+  $selected_entity = $existing_mapping['entity'] ?? '';
+  if (!empty($selected_entity) && !empty($entities)) {
+    $field_options = dataverse_webform_get_entity_field_options($dataverse_config ?? [], $selected_entity);
+    $form['third_party_settings']['dataverse_webform']['field_mapping_wrapper']['field_mappings']['table'][$row_count]['field_wrapper']['field'] = [
+      '#type' => 'select',
+      '#options' => $field_options,
+      '#default_value' => $existing_mapping['field'] ?? '',
     ];
-    
-    $entities_in_mappings = [];
-    foreach ($field_mappings as $mapping) {
-      if (!empty($mapping['entity'])) {
-        $entities_in_mappings[$mapping['entity']] = $entities[$mapping['entity']]['display_name'] ?? $mapping['entity'];
-      }
-    }
-    
-    $form['third_party_settings']['dataverse_webform']['field_mapping_wrapper']['submission_order']['order'] = [
-      '#type' => 'checkboxes',
-      '#title' => t('Submission Order'),
-      '#description' => t('Select and order the entities for submission. Entities will be created in the order specified.'),
-      '#options' => $entities_in_mappings,
-      '#default_value' => $dataverse_config['submission_order'] ?? array_keys($entities_in_mappings),
+  } else {
+    $form['third_party_settings']['dataverse_webform']['field_mapping_wrapper']['field_mappings']['table'][$row_count]['field_wrapper']['field'] = [
+      '#type' => 'select',
+      '#options' => ['' => t('- Select entity first -')],
+      '#disabled' => TRUE,
     ];
   }
-  
+}
+
+/**
+ * Show appropriate messages for field mapping status.
+ */
+function dataverse_webform_show_field_mapping_messages(&$form, $entities, $dataverse_config) {
   if (empty($entities) && dataverse_webform_has_complete_config($dataverse_config)) {
     $form['third_party_settings']['dataverse_webform']['field_mapping_wrapper']['field_mappings']['info'] = [
       '#markup' => '<div class="messages messages--warning">' . t('Unable to load entities from Dataverse. Please check your configuration and test the connection.') . '</div>',
@@ -450,9 +584,39 @@ function dataverse_webform_build_field_mapping_interface(&$form, FormStateInterf
 }
 
 /**
+ * Log submission results with proper error handling.
+ */
+function dataverse_webform_log_submission_results($webform, $webform_submission, $results) {
+  $logger = \Drupal::logger('dataverse_webform');
+  
+  foreach ($results as $entity_name => $result) {
+    if ($result['success']) {
+      $logger->info(
+        'Successfully submitted webform @webform_id submission @submission_id to Dataverse entity @entity',
+        [
+          '@webform_id' => $webform->id(),
+          '@submission_id' => $webform_submission->id(),
+          '@entity' => $entity_name,
+        ]
+      );
+    } else {
+      $logger->error(
+        'Failed to submit webform @webform_id submission @submission_id to Dataverse entity @entity: @error',
+        [
+          '@webform_id' => $webform->id(),
+          '@submission_id' => $webform_submission->id(),
+          '@entity' => $entity_name,
+          '@error' => $result['error'] ?? 'Unknown error',
+        ]
+      );
+    }
+  }
+}
+
+/**
  * Check if Dataverse configuration is complete.
  */
-function dataverse_webform_has_complete_config($config) {
+function dataverse_webform_has_complete_config($config): bool {
   $required_fields = [
     'dataverse_url',
     'azure_tenant_id',
@@ -472,7 +636,7 @@ function dataverse_webform_has_complete_config($config) {
 /**
  * Get field options for a specific entity.
  */
-function dataverse_webform_get_entity_field_options($config, $entity_name) {
+function dataverse_webform_get_entity_field_options($config, $entity_name): array {
   static $field_cache = [];
   
   $cache_key = md5($entity_name . serialize($config));

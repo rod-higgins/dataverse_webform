@@ -7,6 +7,7 @@ services:
       - '@state'
       - '@key.repository'
       - '@config.factory'
+      - '@lock'
   
   dataverse_webform.dataverse_client:
     class: Drupal\dataverse_webform\DataverseClient
@@ -17,6 +18,9 @@ services:
       - '@cache.default'
       - '@dataverse_webform.validator'
       - '@dataverse_webform.submission_processor'
+      - '@config.factory'
+      - '@state'
+      - '@current_user'
 
   dataverse_webform.validator:
     class: Drupal\dataverse_webform\ValidationService

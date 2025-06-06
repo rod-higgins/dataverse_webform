@@ -5,8 +5,6 @@
  * Install, update and uninstall functions for the Dataverse Webform module.
  */
 
-use Drupal\Core\Database\Database;
-
 /**
  * Implements hook_requirements().
  */
@@ -161,9 +159,9 @@ function dataverse_webform_uninstall() {
     }
   }
   
-  // Clear cache entries
+  // Clear cache entries using proper cache invalidation
   $cache_backend = \Drupal::cache('default');
-  $cache_backend->deleteAll();
+  $cache_backend->invalidateTags(['dataverse_webform']);
   
   // Clear state entries (cached tokens)
   $state = \Drupal::state();
@@ -261,34 +259,32 @@ function dataverse_webform_update_8002() {
 
 /**
  * Update 8003: Clear cached entity and field metadata.
+ * 
+ * FIXED: Replaced direct SQL query with proper cache invalidation.
  */
 function dataverse_webform_update_8003() {
   $cache_backend = \Drupal::cache('default');
   
-  // Clear all Dataverse-related cache entries
-  $cache_tags = ['dataverse_webform:entities', 'dataverse_webform:fields'];
-  foreach ($cache_tags as $tag) {
+  // Use proper cache tag invalidation instead of direct SQL
+  $cache_backend->invalidateTags(['dataverse_webform']);
+  
+  // Also invalidate specific cache patterns using cache tag invalidation
+  $cache_tags_to_invalidate = [
+    'dataverse_webform:entities',
+    'dataverse_webform:fields',
+    'dataverse_webform:config',
+    'dataverse_webform:metadata',
+  ];
+  
+  foreach ($cache_tags_to_invalidate as $tag) {
     $cache_backend->invalidateTags([$tag]);
   }
   
-  // Clear all cache entries with dataverse_webform prefix
-  $cids = [];
-  $result = Database::getConnection()->select('cache_default', 'c')
-    ->fields('c', ['cid'])
-    ->condition('cid', 'dataverse_webform%', 'LIKE')
-    ->execute();
-    
-  while ($row = $result->fetchAssoc()) {
-    $cids[] = $row['cid'];
-  }
+  // Clear any remaining module-specific cache entries safely
+  $cache_service = \Drupal::service('cache_tags.invalidator');
+  $cache_service->invalidateTags(['dataverse_webform']);
   
-  if (!empty($cids)) {
-    $cache_backend->deleteMultiple($cids);
-  }
-  
-  return t('Cleared @count cached Dataverse metadata entries. Entity and field information will be refreshed on next access.', [
-    '@count' => count($cids),
-  ]);
+  return t('Cleared cached Dataverse metadata entries using proper cache invalidation. Entity and field information will be refreshed on next access.');
 }
 
 /**
@@ -348,9 +344,27 @@ function dataverse_webform_update_8004() {
 }
 
 /**
+ * Update 8005: Initialize rate limiting and performance improvements.
+ */
+function dataverse_webform_update_8005() {
+  // Set up rate limiting configuration
+  $config = \Drupal::configFactory()->getEditable('dataverse_webform.settings');
+  $config->set('rate_limit_requests_per_hour', 100);
+  $config->set('rate_limit_enabled', true);
+  $config->set('cache_tags_enabled', true);
+  $config->save();
+  
+  // Clear all existing caches to ensure new cache tag system works
+  $cache_backend = \Drupal::cache('default');
+  $cache_backend->invalidateTags(['dataverse_webform']);
+  
+  return t('Initialized rate limiting and performance improvements. Rate limit set to 100 requests per hour per user.');
+}
+
+/**
  * Get webforms configured with Dataverse integration.
  */
-function dataverse_webform_get_configured_webforms() {
+function dataverse_webform_get_configured_webforms(): array {
   $webforms = \Drupal::entityTypeManager()->getStorage('webform')->loadMultiple();
   $configured_webforms = [];
   
@@ -367,7 +381,7 @@ function dataverse_webform_get_configured_webforms() {
 /**
  * Check for configuration issues across all webforms.
  */
-function dataverse_webform_check_configuration_issues() {
+function dataverse_webform_check_configuration_issues(): array {
   $issues = [];
   $webforms = \Drupal::entityTypeManager()->getStorage('webform')->loadMultiple();
   

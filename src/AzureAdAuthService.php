@@ -6,6 +6,7 @@ use Drupal\Core\Http\ClientFactory;
 use Drupal\Core\Logger\LoggerChannelFactoryInterface;
 use Drupal\Core\State\StateInterface;
 use Drupal\Core\Config\ConfigFactoryInterface;
+use Drupal\Core\Lock\LockBackendInterface;
 use Drupal\key\KeyRepositoryInterface;
 use Drupal\dataverse_webform\Exception\DataverseException;
 use GuzzleHttp\Exception\RequestException;
@@ -29,6 +30,11 @@ class AzureAdAuthService {
    * Maximum token lifetime in seconds (24 hours).
    */
   public const MAX_TOKEN_LIFETIME = 86400;
+
+  /**
+   * Token refresh lock timeout in seconds.
+   */
+  public const LOCK_TIMEOUT = 30;
 
   /**
    * The HTTP client factory.
@@ -56,6 +62,11 @@ class AzureAdAuthService {
   protected ConfigFactoryInterface $configFactory;
 
   /**
+   * The lock service.
+   */
+  protected LockBackendInterface $lock;
+
+  /**
    * Constructs an AzureAdAuthService object.
    *
    * @param \Drupal\Core\Http\ClientFactory $http_client_factory
@@ -68,19 +79,23 @@ class AzureAdAuthService {
    *   The key repository service.
    * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
    *   The config factory service.
+   * @param \Drupal\Core\Lock\LockBackendInterface $lock
+   *   The lock service.
    */
   public function __construct(
     ClientFactory $http_client_factory,
     LoggerChannelFactoryInterface $logger_factory,
     StateInterface $state,
     KeyRepositoryInterface $key_repository,
-    ConfigFactoryInterface $config_factory
+    ConfigFactoryInterface $config_factory,
+    LockBackendInterface $lock
   ) {
     $this->httpClientFactory = $http_client_factory;
     $this->loggerFactory = $logger_factory;
     $this->state = $state;
     $this->keyRepository = $key_repository;
     $this->configFactory = $config_factory;
+    $this->lock = $lock;
   }
 
   /**
@@ -99,12 +114,204 @@ class AzureAdAuthService {
     // Validate configuration
     $this->validateAuthConfig($config);
 
-    // Check if we have a cached valid token
-    $cached_token = $this->getCachedToken($config);
+    // Check if we have a cached valid token with locking
+    $cached_token = $this->getCachedTokenWithLock($config);
     if ($cached_token) {
       return $cached_token;
     }
 
+    // Get new token with locking to prevent race conditions
+    return $this->getNewTokenWithLock($config);
+  }
+
+  /**
+   * Invalidate cached token for specific configuration.
+   *
+   * @param array $config
+   *   Configuration array.
+   */
+  public function invalidateToken(array $config): void {
+    $cache_key = $this->buildCacheKey($config);
+    $lock_key = $cache_key . ':lock';
+    
+    // Acquire lock before invalidating to prevent race conditions
+    if ($this->lock->acquire($lock_key, self::LOCK_TIMEOUT)) {
+      try {
+        $this->state->delete($cache_key);
+        $this->loggerFactory->get('dataverse_webform')->info('Invalidated cached Azure AD token');
+      } finally {
+        $this->lock->release($lock_key);
+      }
+    } else {
+      $this->loggerFactory->get('dataverse_webform')->warning(
+        'Could not acquire lock to invalidate token, proceeding anyway'
+      );
+      $this->state->delete($cache_key);
+    }
+  }
+
+  /**
+   * Check if current configuration has a valid cached token.
+   *
+   * @param array $config
+   *   Configuration array.
+   *
+   * @return bool
+   *   TRUE if valid token exists, FALSE otherwise.
+   */
+  public function hasValidToken(array $config): bool {
+    return $this->getCachedToken($config) !== null;
+  }
+
+  /**
+   * Get a value from the Key module.
+   *
+   * @param string $key_id
+   *   The key ID.
+   *
+   * @return string|null
+   *   The key value or NULL if not found.
+   *
+   * @throws \Drupal\dataverse_webform\Exception\DataverseException
+   *   When key cannot be retrieved.
+   */
+  protected function getKeyValue(string $key_id): ?string {
+    if (empty($key_id)) {
+      return null;
+    }
+
+    try {
+      $key = $this->keyRepository->getKey($key_id);
+      if (!$key) {
+        throw new DataverseException("Key '{$key_id}' not found");
+      }
+
+      $value = $key->getKeyValue();
+      if (empty($value)) {
+        throw new DataverseException("Key '{$key_id}' has no value");
+      }
+
+      return $value;
+      
+    } catch (\Exception $e) {
+      throw new DataverseException("Failed to retrieve key '{$key_id}': " . $e->getMessage(), 0, $e);
+    }
+  }
+
+  /**
+   * Get cached access token with locking mechanism.
+   *
+   * @param array $config
+   *   Configuration array.
+   *
+   * @return string|null
+   *   The cached token or NULL if expired/not found.
+   */
+  protected function getCachedTokenWithLock(array $config): ?string {
+    $cache_key = $this->buildCacheKey($config);
+    $lock_key = $cache_key . ':lock';
+    
+    // Try to acquire lock for reading token
+    if ($this->lock->acquire($lock_key, 5)) {
+      try {
+        return $this->getCachedToken($config);
+      } finally {
+        $this->lock->release($lock_key);
+      }
+    } else {
+      // If we can't get a lock quickly, just read without lock
+      // as this is likely a read operation and the token is probably valid
+      return $this->getCachedToken($config);
+    }
+  }
+
+  /**
+   * Get cached access token if still valid.
+   *
+   * @param array $config
+   *   Configuration array.
+   *
+   * @return string|null
+   *   The cached token or NULL if expired/not found.
+   */
+  protected function getCachedToken(array $config): ?string {
+    $cache_key = $this->buildCacheKey($config);
+    $cached_data = $this->state->get($cache_key);
+
+    if ($cached_data && is_array($cached_data)) {
+      $expires = $cached_data['expires'] ?? 0;
+      $token = $cached_data['token'] ?? '';
+      
+      if (!empty($token) && $expires > time()) {
+        return $token;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Get new token with locking mechanism to prevent race conditions.
+   *
+   * @param array $config
+   *   Configuration array.
+   *
+   * @return string|null
+   *   The new access token or NULL on failure.
+   *
+   * @throws \Drupal\dataverse_webform\Exception\DataverseException
+   *   When authentication fails.
+   */
+  protected function getNewTokenWithLock(array $config): ?string {
+    $cache_key = $this->buildCacheKey($config);
+    $lock_key = $cache_key . ':refresh';
+    
+    // Try to acquire lock for token refresh
+    if ($this->lock->acquire($lock_key, self::LOCK_TIMEOUT)) {
+      try {
+        // Double-check if token was refreshed by another process while waiting for lock
+        $cached_token = $this->getCachedToken($config);
+        if ($cached_token) {
+          return $cached_token;
+        }
+
+        // Proceed with token refresh
+        return $this->refreshAccessToken($config);
+        
+      } finally {
+        $this->lock->release($lock_key);
+      }
+    } else {
+      // If we can't acquire the lock, another process is likely refreshing the token
+      // Wait a bit and check if token is now available
+      usleep(500000); // Wait 500ms
+      
+      $cached_token = $this->getCachedToken($config);
+      if ($cached_token) {
+        return $cached_token;
+      }
+      
+      // If still no token, try to refresh without lock (last resort)
+      $this->loggerFactory->get('dataverse_webform')->warning(
+        'Could not acquire lock for token refresh, proceeding without lock'
+      );
+      return $this->refreshAccessToken($config);
+    }
+  }
+
+  /**
+   * Refresh access token from Azure AD.
+   *
+   * @param array $config
+   *   Configuration array.
+   *
+   * @return string|null
+   *   The new access token or NULL on failure.
+   *
+   * @throws \Drupal\dataverse_webform\Exception\DataverseException
+   *   When authentication fails.
+   */
+  protected function refreshAccessToken(array $config): ?string {
     // Get Azure AD credentials from Key module
     $client_id = $this->getKeyValue($config['azure_client_id_key'] ?? '');
     $client_secret = $this->getKeyValue($config['azure_client_secret_key'] ?? '');
@@ -171,92 +378,6 @@ class AzureAdAuthService {
   }
 
   /**
-   * Invalidate cached token for specific configuration.
-   *
-   * @param array $config
-   *   Configuration array.
-   */
-  public function invalidateToken(array $config): void {
-    $cache_key = $this->buildCacheKey($config);
-    $this->state->delete($cache_key);
-    
-    $this->loggerFactory->get('dataverse_webform')->info('Invalidated cached Azure AD token');
-  }
-
-  /**
-   * Check if current configuration has a valid cached token.
-   *
-   * @param array $config
-   *   Configuration array.
-   *
-   * @return bool
-   *   TRUE if valid token exists, FALSE otherwise.
-   */
-  public function hasValidToken(array $config): bool {
-    return $this->getCachedToken($config) !== null;
-  }
-
-  /**
-   * Get a value from the Key module.
-   *
-   * @param string $key_id
-   *   The key ID.
-   *
-   * @return string|null
-   *   The key value or NULL if not found.
-   *
-   * @throws \Drupal\dataverse_webform\Exception\DataverseException
-   *   When key cannot be retrieved.
-   */
-  protected function getKeyValue(string $key_id): ?string {
-    if (empty($key_id)) {
-      return null;
-    }
-
-    try {
-      $key = $this->keyRepository->getKey($key_id);
-      if (!$key) {
-        throw new DataverseException("Key '{$key_id}' not found");
-      }
-
-      $value = $key->getKeyValue();
-      if (empty($value)) {
-        throw new DataverseException("Key '{$key_id}' has no value");
-      }
-
-      return $value;
-      
-    } catch (\Exception $e) {
-      throw new DataverseException("Failed to retrieve key '{$key_id}': " . $e->getMessage(), 0, $e);
-    }
-  }
-
-  /**
-   * Get cached access token if still valid.
-   *
-   * @param array $config
-   *   Configuration array.
-   *
-   * @return string|null
-   *   The cached token or NULL if expired/not found.
-   */
-  protected function getCachedToken(array $config): ?string {
-    $cache_key = $this->buildCacheKey($config);
-    $cached_data = $this->state->get($cache_key);
-
-    if ($cached_data && is_array($cached_data)) {
-      $expires = $cached_data['expires'] ?? 0;
-      $token = $cached_data['token'] ?? '';
-      
-      if (!empty($token) && $expires > time()) {
-        return $token;
-      }
-    }
-
-    return null;
-  }
-
-  /**
    * Cache an access token.
    *
    * @param array $config
@@ -273,6 +394,7 @@ class AzureAdAuthService {
       'token' => $token,
       'expires' => time() + $expires_in - self::TOKEN_EXPIRATION_BUFFER,
       'created' => time(),
+      'expires_in' => $expires_in,
     ];
     
     $this->state->set($cache_key, $cache_data);
