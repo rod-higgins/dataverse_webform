@@ -11,6 +11,7 @@ use Drupal\webform\WebformSubmissionInterface;
 use Drupal\dataverse_webform\Exception\DataverseException;
 use Drupal\dataverse_webform\Cache\DataverseCacheManager;
 use GuzzleHttp\Exception\RequestException;
+use Psr\Http\Message\ResponseInterface;
 
 /**
  * Dataverse client service for OData API integration.
@@ -21,6 +22,9 @@ class DataverseClient implements DataverseClientInterface {
   public const MAX_BATCH_SIZE = 100;
   public const DEFAULT_TIMEOUT = 30;
   public const DEFAULT_RATE_LIMIT = 100;
+  public const RATE_LIMIT_WINDOW = 3600; // 1 hour in seconds
+  public const SUCCESS_STATUS_MIN = 200;
+  public const SUCCESS_STATUS_MAX = 299;
 
   protected ClientFactory $httpClientFactory;
   protected LoggerChannelFactoryInterface $loggerFactory;
@@ -91,7 +95,7 @@ class DataverseClient implements DataverseClientInterface {
         'timeout' => 10,
       ]);
 
-      $success = $response->getStatusCode() === 200;
+      $success = $this->isSuccessResponse($response);
       $this->cacheManager->setCachedTokenValidation($config, $success);
       
       if ($success) {
@@ -208,6 +212,15 @@ class DataverseClient implements DataverseClientInterface {
     return $validation_results;
   }
 
+  public function invalidateConfigurationCache(array $config): void {
+    $this->cacheManager->invalidateConfigCache($config);
+    $this->azureAuth->invalidateToken($config);
+  }
+
+  public function getCacheManager(): DataverseCacheManager {
+    return $this->cacheManager;
+  }
+
   protected function processSubmissionData(WebformSubmissionInterface $submission, array $config): array {
     $submission_data = $submission->getData();
     $field_mappings = $config['field_mappings'] ?? [];
@@ -299,14 +312,19 @@ class DataverseClient implements DataverseClientInterface {
     return $access_token;
   }
 
-  protected function executeRequest(array $config, string $endpoint, string $access_token) {
+  protected function executeRequest(array $config, string $endpoint, string $access_token): ResponseInterface {
     return $this->createHttpClient($config)->get($endpoint, [
       'headers' => $this->buildHeaders($access_token),
     ]);
   }
 
-  protected function validateResponseStatus($response, string $error_context): void {
-    if ($response->getStatusCode() < 200 || $response->getStatusCode() >= 300) {
+  protected function isSuccessResponse(ResponseInterface $response): bool {
+    $status_code = $response->getStatusCode();
+    return $status_code >= self::SUCCESS_STATUS_MIN && $status_code <= self::SUCCESS_STATUS_MAX;
+  }
+
+  protected function validateResponseStatus(ResponseInterface $response, string $error_context): void {
+    if (!$this->isSuccessResponse($response)) {
       throw new DataverseException($error_context . ': HTTP ' . $response->getStatusCode());
     }
   }
@@ -326,7 +344,7 @@ class DataverseClient implements DataverseClientInterface {
       ->select(['LogicalName', 'Attributes']);
   }
 
-  protected function parseEntitiesResponse($response): array {
+  protected function parseEntitiesResponse(ResponseInterface $response): array {
     $this->validateResponseStatus($response, 'Failed to retrieve entities');
     $data = $this->parseJsonResponse($response);
     $entities = [];
@@ -350,7 +368,7 @@ class DataverseClient implements DataverseClientInterface {
     ];
   }
 
-  protected function parseFieldsResponse($response): array {
+  protected function parseFieldsResponse(ResponseInterface $response): array {
     $this->validateResponseStatus($response, 'Failed to retrieve entity fields');
     $data = $this->parseJsonResponse($response);
     $fields = [];
@@ -380,7 +398,7 @@ class DataverseClient implements DataverseClientInterface {
     ];
   }
 
-  protected function parseJsonResponse($response): array {
+  protected function parseJsonResponse(ResponseInterface $response): array {
     $content = $response->getBody()->getContents();
     $data = json_decode($content, true);
     
@@ -397,7 +415,7 @@ class DataverseClient implements DataverseClientInterface {
            !in_array($attribute['AttributeType'], ['Virtual', 'EntityName', 'PartyList']);
   }
 
-  protected function parseEntityCreationResponse($response): array {
+  protected function parseEntityCreationResponse(ResponseInterface $response): array {
     $location = $response->getHeader('OData-EntityId')[0] ?? '';
     $entity_id = null;
     
@@ -423,10 +441,10 @@ class DataverseClient implements DataverseClientInterface {
     $requests = $this->state->get($rate_limit_key, []);
     
     $current_time = time();
-    $requests = array_filter($requests, fn($time) => $time > ($current_time - 3600));
+    $requests = array_filter($requests, fn($time) => $time > ($current_time - self::RATE_LIMIT_WINDOW));
     
     if (count($requests) >= $max_requests) {
-      throw DataverseException::validationError(
+      throw DataverseException::rateLimitError(
         "Rate limit exceeded: {$max_requests} requests per hour",
         ['user_id' => $this->currentUser->id(), 'requests_count' => count($requests)]
       );
@@ -443,7 +461,7 @@ class DataverseClient implements DataverseClientInterface {
     $requests = $this->state->get($rate_limit_key, []);
     
     $current_time = time();
-    $requests = array_filter($requests, fn($time) => $time > ($current_time - 3600));
+    $requests = array_filter($requests, fn($time) => $time > ($current_time - self::RATE_LIMIT_WINDOW));
     $requests[] = $current_time;
     
     $this->state->set($rate_limit_key, $requests);
@@ -465,12 +483,4 @@ class DataverseClient implements DataverseClientInterface {
     ], $additional_headers);
   }
 
-  public function invalidateConfigurationCache(array $config): void {
-    $this->cacheManager->invalidateConfigCache($config);
-    $this->azureAuth->invalidateToken($config);
-  }
-
-  public function getCacheManager(): DataverseCacheManager {
-    return $this->cacheManager;
-  }
 }

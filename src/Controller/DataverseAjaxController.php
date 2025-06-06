@@ -15,6 +15,10 @@ use Symfony\Component\HttpFoundation\Request;
  */
 class DataverseAjaxController extends ControllerBase {
 
+  public const MAX_RESPONSE_ITEMS = 1000;
+  public const RATE_LIMIT_REQUESTS = 100;
+  public const RATE_LIMIT_WINDOW = 3600; // 1 hour
+
   protected DataverseClientInterface $dataverseClient;
   protected ConfigurationManager $configManager;
 
@@ -35,6 +39,8 @@ class DataverseAjaxController extends ControllerBase {
 
   public function getEntities(Request $request): JsonResponse {
     try {
+      $this->checkRateLimit($request);
+      
       $config = $this->buildConfigFromRequest($request);
       $this->validateRequiredConfig($config, ['dataverse_url', 'azure_tenant_id']);
 
@@ -45,10 +51,11 @@ class DataverseAjaxController extends ControllerBase {
         'success' => true,
         'entities' => $entity_options,
         'count' => count($entity_options),
+        'timestamp' => time(),
       ]);
 
     } catch (DataverseException $e) {
-      return $this->createErrorResponse($e->getMessage(), 'dataverse_error', 400);
+      return $this->createErrorResponse($e->getMessage(), $e->getDataverseErrorCode() ?? 'dataverse_error', 400);
     } catch (\Exception $e) {
       $this->logUnexpectedError('getEntities', $e);
       return $this->createErrorResponse('An unexpected error occurred', 'system_error', 500);
@@ -57,6 +64,8 @@ class DataverseAjaxController extends ControllerBase {
 
   public function getEntityFields(Request $request): JsonResponse {
     try {
+      $this->checkRateLimit($request);
+      
       $entity_name = $request->query->get('entity');
       if (empty($entity_name)) {
         return $this->createErrorResponse('Entity name is required', 'validation_error', 400);
@@ -73,10 +82,11 @@ class DataverseAjaxController extends ControllerBase {
         'fields' => $field_options,
         'entity' => $entity_name,
         'count' => count($field_options),
+        'timestamp' => time(),
       ]);
 
     } catch (DataverseException $e) {
-      return $this->createErrorResponse($e->getMessage(), 'dataverse_error', 400);
+      return $this->createErrorResponse($e->getMessage(), $e->getDataverseErrorCode() ?? 'dataverse_error', 400);
     } catch (\Exception $e) {
       $this->logUnexpectedError('getEntityFields', $e);
       return $this->createErrorResponse('An unexpected error occurred', 'system_error', 500);
@@ -85,6 +95,8 @@ class DataverseAjaxController extends ControllerBase {
 
   public function validateConfiguration(Request $request): JsonResponse {
     try {
+      $this->checkRateLimit($request);
+      
       $config = $this->extractConfigFromRequest($request);
       $validation_results = $this->configManager->validateConfiguration($config);
 
@@ -114,6 +126,8 @@ class DataverseAjaxController extends ControllerBase {
 
   public function getFieldMappingSuggestions(Request $request): JsonResponse {
     try {
+      $this->checkRateLimit($request);
+      
       $webform_fields = $request->query->get('webform_fields', []);
       $target_entities = $request->query->get('entities', []);
       
@@ -133,6 +147,7 @@ class DataverseAjaxController extends ControllerBase {
         'suggestions' => $suggestions,
         'webform_fields' => $webform_fields,
         'entities' => $target_entities,
+        'timestamp' => time(),
       ]);
 
     } catch (\Exception $e) {
@@ -143,8 +158,13 @@ class DataverseAjaxController extends ControllerBase {
 
   protected function formatEntitiesForResponse(array $entities): array {
     $entity_options = [];
+    $count = 0;
     
     foreach ($entities as $entity) {
+      if ($count >= self::MAX_RESPONSE_ITEMS) {
+        break;
+      }
+      
       $entity_options[$entity['logical_name']] = [
         'label' => $entity['display_name'] . ' (' . $entity['logical_name'] . ')',
         'logical_name' => $entity['logical_name'],
@@ -152,6 +172,7 @@ class DataverseAjaxController extends ControllerBase {
         'description' => $entity['description'],
         'entity_set_name' => $entity['entity_set_name'],
       ];
+      $count++;
     }
 
     return $entity_options;
@@ -159,8 +180,13 @@ class DataverseAjaxController extends ControllerBase {
 
   protected function formatFieldsForResponse(array $fields): array {
     $field_options = [];
+    $count = 0;
     
     foreach ($fields as $field) {
+      if ($count >= self::MAX_RESPONSE_ITEMS) {
+        break;
+      }
+      
       $field_options[$field['logical_name']] = [
         'label' => $field['display_name'] . ' (' . $field['logical_name'] . ')',
         'logical_name' => $field['logical_name'],
@@ -172,6 +198,7 @@ class DataverseAjaxController extends ControllerBase {
         'is_primary_id' => $field['is_primary_id'] ?? false,
         'is_primary_name' => $field['is_primary_name'] ?? false,
       ];
+      $count++;
     }
 
     return $field_options;
@@ -232,7 +259,7 @@ class DataverseAjaxController extends ControllerBase {
     $missing_fields = array_filter($required_fields, fn($field) => empty($config[$field]));
 
     if (!empty($missing_fields)) {
-      throw new DataverseException('Missing required configuration: ' . implode(', ', $missing_fields));
+      throw DataverseException::configurationError('Missing required configuration: ' . implode(', ', $missing_fields));
     }
   }
 
@@ -296,6 +323,7 @@ class DataverseAjaxController extends ControllerBase {
           'field' => $entity_field['logical_name'],
           'confidence' => 100,
           'reason' => 'Exact match',
+          'display_name' => $entity_field['display_name'],
         ];
       }
     }
@@ -315,6 +343,7 @@ class DataverseAjaxController extends ControllerBase {
                 'field' => $entity_field['logical_name'],
                 'confidence' => 80,
                 'reason' => "Common mapping for '{$pattern}'",
+                'display_name' => $entity_field['display_name'],
               ];
             }
           }
@@ -338,6 +367,7 @@ class DataverseAjaxController extends ControllerBase {
           'field' => $entity_field['logical_name'],
           'confidence' => 60,
           'reason' => 'Partial name match',
+          'display_name' => $entity_field['display_name'],
         ];
       }
     }
@@ -350,13 +380,33 @@ class DataverseAjaxController extends ControllerBase {
       'success' => false,
       'error' => $message,
       'error_type' => $error_type,
+      'timestamp' => time(),
     ], $status_code);
   }
 
   protected function logUnexpectedError(string $method, \Exception $e): void {
     $this->getLogger('dataverse_webform')->error(
       'Unexpected error in @method: @error',
-      ['@method' => $method, '@error' => $e->getMessage()]
+      ['@method' => $method, '@error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]
     );
   }
+
+  protected function checkRateLimit(Request $request): void {
+    $client_ip = $request->getClientIp();
+    $rate_limit_key = 'dataverse_webform:ajax_rate_limit:' . hash('sha256', $client_ip);
+    
+    $state = \Drupal::state();
+    $requests = $state->get($rate_limit_key, []);
+    
+    $current_time = time();
+    $requests = array_filter($requests, fn($time) => $time > ($current_time - self::RATE_LIMIT_WINDOW));
+    
+    if (count($requests) >= self::RATE_LIMIT_REQUESTS) {
+      throw new \Exception('Rate limit exceeded for AJAX requests');
+    }
+    
+    $requests[] = $current_time;
+    $state->set($rate_limit_key, $requests);
+  }
+
 }

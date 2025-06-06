@@ -11,10 +11,14 @@ class ODataQueryBuilder {
 
   public const MAX_TOP_LIMIT = 5000;
   public const MAX_STRING_LENGTH = 1000;
+  public const MAX_IDENTIFIER_LENGTH = 100;
+  public const IDENTIFIER_PATTERN = '/^[a-zA-Z][a-zA-Z0-9_.\/_]*$/';
+  public const DANGEROUS_CHARS_PATTERN = '/[<>\'";]/';
   public const ALLOWED_OPERATORS = [
     'eq', 'ne', 'gt', 'ge', 'lt', 'le', 
     'contains', 'startswith', 'endswith', 'in', 'not'
   ];
+  public const ALLOWED_DIRECTIONS = ['asc', 'desc'];
 
   protected string $entitySet;
   protected array $select = [];
@@ -28,7 +32,7 @@ class ODataQueryBuilder {
   public function __construct(string $entity_set) {
     $this->entitySet = $this->sanitizeIdentifier($entity_set);
     if (empty($this->entitySet)) {
-      throw new DataverseException('Entity set name cannot be empty or invalid');
+      throw DataverseException::validationError('Entity set name cannot be empty or invalid');
     }
   }
 
@@ -36,7 +40,7 @@ class ODataQueryBuilder {
     foreach ($fields as $field) {
       $sanitized_field = $this->sanitizeIdentifier($field);
       if (empty($sanitized_field)) {
-        throw new DataverseException("Invalid field name in select: {$field}");
+        throw DataverseException::validationError("Invalid field name in select: {$field}");
       }
       $this->select[] = $sanitized_field;
     }
@@ -46,7 +50,7 @@ class ODataQueryBuilder {
   public function filter(string $field, string $operator, $value): self {
     $sanitized_field = $this->sanitizeIdentifier($field);
     if (empty($sanitized_field)) {
-      throw new DataverseException("Invalid field name in filter: {$field}");
+      throw DataverseException::validationError("Invalid field name in filter: {$field}");
     }
 
     $sanitized_operator = $this->sanitizeOperator($operator);
@@ -57,8 +61,8 @@ class ODataQueryBuilder {
   }
 
   public function rawFilter(string $filter): self {
-    if (preg_match('/[<>\'";]/', $filter)) {
-      throw new DataverseException('Raw filter contains potentially dangerous characters');
+    if (preg_match(self::DANGEROUS_CHARS_PATTERN, $filter)) {
+      throw DataverseException::validationError('Raw filter contains potentially dangerous characters');
     }
     
     $this->filters[] = $filter;
@@ -96,10 +100,10 @@ class ODataQueryBuilder {
   public function orderBy(string $field, string $direction = 'asc'): self {
     $sanitized_field = $this->sanitizeIdentifier($field);
     if (empty($sanitized_field)) {
-      throw new DataverseException("Invalid field name in orderBy: {$field}");
+      throw DataverseException::validationError("Invalid field name in orderBy: {$field}");
     }
     
-    $sanitized_direction = in_array(strtolower($direction), ['asc', 'desc']) ? strtolower($direction) : 'asc';
+    $sanitized_direction = $this->sanitizeDirection($direction);
     
     $this->orderBy[] = "{$sanitized_field} {$sanitized_direction}";
     return $this;
@@ -107,7 +111,7 @@ class ODataQueryBuilder {
 
   public function top(int $limit): self {
     if ($limit < 1 || $limit > self::MAX_TOP_LIMIT) {
-      throw new DataverseException("Top limit must be between 1 and " . self::MAX_TOP_LIMIT);
+      throw DataverseException::validationError("Top limit must be between 1 and " . self::MAX_TOP_LIMIT);
     }
     
     $this->top = $limit;
@@ -116,7 +120,7 @@ class ODataQueryBuilder {
 
   public function skip(int $offset): self {
     if ($offset < 0) {
-      throw new DataverseException('Skip offset cannot be negative');
+      throw DataverseException::validationError('Skip offset cannot be negative');
     }
     
     $this->skip = $offset;
@@ -127,7 +131,7 @@ class ODataQueryBuilder {
     foreach ($relationships as $relationship) {
       $sanitized_relationship = $this->sanitizeIdentifier($relationship);
       if (empty($sanitized_relationship)) {
-        throw new DataverseException("Invalid relationship name in expand: {$relationship}");
+        throw DataverseException::validationError("Invalid relationship name in expand: {$relationship}");
       }
       $this->expand[] = $sanitized_relationship;
     }
@@ -146,7 +150,7 @@ class ODataQueryBuilder {
     if (!empty($query_params)) {
       $query_string = http_build_query($query_params);
       if ($query_string === false) {
-        throw new DataverseException('Failed to build query string');
+        throw DataverseException::validationError('Failed to build query string');
       }
       $url .= '?' . $query_string;
     }
@@ -205,28 +209,40 @@ class ODataQueryBuilder {
 
   protected function validateCondition(array $condition): void {
     if (!isset($condition['field'], $condition['operator'], $condition['value'])) {
-      throw new DataverseException('Each filter condition must have field, operator, and value');
+      throw DataverseException::validationError('Each filter condition must have field, operator, and value');
     }
   }
 
   protected function sanitizeIdentifier(string $identifier): string {
-    $sanitized = preg_replace('/[^a-zA-Z0-9_.\/_]/', '', $identifier);
-    
-    if (!empty($sanitized) && !preg_match('/^[a-zA-Z]/', $sanitized)) {
+    if (strlen($identifier) > self::MAX_IDENTIFIER_LENGTH) {
+      return '';
+    }
+
+    if (!preg_match(self::IDENTIFIER_PATTERN, $identifier)) {
       return '';
     }
     
-    return $sanitized;
+    return $identifier;
   }
 
   protected function sanitizeOperator(string $operator): string {
     $operator = strtolower(trim($operator));
     
     if (!in_array($operator, self::ALLOWED_OPERATORS)) {
-      throw new DataverseException("Invalid operator: {$operator}");
+      throw DataverseException::validationError("Invalid operator: {$operator}");
     }
     
     return $operator;
+  }
+
+  protected function sanitizeDirection(string $direction): string {
+    $direction = strtolower(trim($direction));
+    
+    if (!in_array($direction, self::ALLOWED_DIRECTIONS)) {
+      return 'asc'; // Default to ascending
+    }
+    
+    return $direction;
   }
 
   protected function sanitizeValue($value): string {
@@ -254,12 +270,12 @@ class ODataQueryBuilder {
       return $this->sanitizeValue((string) $value);
     }
     
-    throw new DataverseException('Unsupported value type for OData query: ' . gettype($value));
+    throw DataverseException::validationError('Unsupported value type for OData query: ' . gettype($value));
   }
 
   protected function sanitizeStringValue(string $value): string {
     if (strlen($value) > self::MAX_STRING_LENGTH) {
-      throw new DataverseException('String value exceeds maximum length of ' . self::MAX_STRING_LENGTH . ' characters');
+      throw DataverseException::validationError('String value exceeds maximum length of ' . self::MAX_STRING_LENGTH . ' characters');
     }
     
     $escaped = str_replace("'", "''", $value);
@@ -273,4 +289,5 @@ class ODataQueryBuilder {
     }
     return '(' . implode(',', $sanitized_items) . ')';
   }
+
 }

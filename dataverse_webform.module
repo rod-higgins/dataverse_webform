@@ -161,27 +161,36 @@ function _dataverse_webform_check_module_status(): array {
 function _dataverse_webform_check_configuration_status(): array {
   $requirements = [];
   
-  $configured_webforms = _dataverse_webform_get_configured_webforms();
-  if (!empty($configured_webforms)) {
-    $count = count($configured_webforms);
-    $requirements['dataverse_webform_configured'] = [
-      'title' => t('Dataverse Webform Integration'),
-      'value' => t('@count webform(s) configured', ['@count' => $count]),
-      'description' => t('Dataverse integration is active on: @forms', [
-        '@forms' => implode(', ', array_keys($configured_webforms)),
-      ]),
-      'severity' => REQUIREMENT_INFO,
-    ];
-    
-    $config_issues = _dataverse_webform_check_configuration_issues();
-    if (!empty($config_issues)) {
-      $requirements['dataverse_webform_config_issues'] = [
+  try {
+    $configured_webforms = _dataverse_webform_get_configured_webforms();
+    if (!empty($configured_webforms)) {
+      $count = count($configured_webforms);
+      $requirements['dataverse_webform_configured'] = [
         'title' => t('Dataverse Webform Integration'),
-        'value' => t('Configuration issues detected'),
-        'description' => t('Issues found: @issues', ['@issues' => implode(', ', $config_issues)]),
-        'severity' => REQUIREMENT_WARNING,
+        'value' => t('@count webform(s) configured', ['@count' => $count]),
+        'description' => t('Dataverse integration is active on: @forms', [
+          '@forms' => implode(', ', array_keys($configured_webforms)),
+        ]),
+        'severity' => REQUIREMENT_INFO,
       ];
+      
+      $config_issues = _dataverse_webform_check_configuration_issues();
+      if (!empty($config_issues)) {
+        $requirements['dataverse_webform_config_issues'] = [
+          'title' => t('Dataverse Webform Integration'),
+          'value' => t('Configuration issues detected'),
+          'description' => t('Issues found: @issues', ['@issues' => implode(', ', $config_issues)]),
+          'severity' => REQUIREMENT_WARNING,
+        ];
+      }
     }
+  } catch (\Exception $e) {
+    $requirements['dataverse_webform_error'] = [
+      'title' => t('Dataverse Webform Integration'),
+      'value' => t('Error checking configuration'),
+      'description' => t('Error: @error', ['@error' => $e->getMessage()]),
+      'severity' => REQUIREMENT_ERROR,
+    ];
   }
   
   return $requirements;
@@ -215,7 +224,8 @@ function _dataverse_webform_check_configuration_issues(): array {
     $dataverse_config = $webform->getThirdPartySetting('dataverse_webform', 'dataverse_config');
     
     if (!empty($dataverse_config['enabled'])) {
-      $issues = array_merge($issues, _dataverse_webform_validate_webform_config($webform, $dataverse_config));
+      $webform_issues = _dataverse_webform_validate_webform_config($webform, $dataverse_config);
+      $issues = array_merge($issues, $webform_issues);
     }
   }
   
@@ -243,11 +253,15 @@ function _dataverse_webform_validate_webform_config($webform, array $config): ar
   }
   
   // Validate keys
-  $key_repository = \Drupal::service('key.repository');
-  foreach (['azure_client_id_key', 'azure_client_secret_key'] as $key_field) {
-    if (!empty($config[$key_field]) && !$key_repository->getKey($config[$key_field])) {
-      $issues[] = "Webform {$webform_id}: {$key_field} not found";
+  try {
+    $key_repository = \Drupal::service('key.repository');
+    foreach (['azure_client_id_key', 'azure_client_secret_key'] as $key_field) {
+      if (!empty($config[$key_field]) && !$key_repository->getKey($config[$key_field])) {
+        $issues[] = "Webform {$webform_id}: {$key_field} not found";
+      }
     }
+  } catch (\Exception $e) {
+    $issues[] = "Webform {$webform_id}: error validating keys - {$e->getMessage()}";
   }
   
   return $issues;
@@ -297,36 +311,43 @@ function _dataverse_webform_cleanup_old_data(): void {
   $current_time = time();
   $cutoff_time = $current_time - (7 * 24 * 60 * 60); // 7 days ago
   
-  // Clean up old retry records
-  $connection = \Drupal::database();
-  $old_retry_keys = $connection->select('key_value', 'kv')
-    ->fields('kv', ['name'])
-    ->condition('collection', 'state')
-    ->condition('name', 'dataverse_webform:retry:%', 'LIKE')
-    ->condition('value', serialize($cutoff_time), '<')
-    ->execute()
-    ->fetchCol();
-  
-  foreach ($old_retry_keys as $key) {
-    $state->delete($key);
-  }
-  
-  // Clean up old rate limit records
-  $rate_limit_keys = $connection->select('key_value', 'kv')
-    ->fields('kv', ['name'])
-    ->condition('collection', 'state')
-    ->condition('name', 'dataverse_webform:rate_limit:%', 'LIKE')
-    ->execute()
-    ->fetchCol();
-  
-  foreach ($rate_limit_keys as $key) {
-    $requests = $state->get($key, []);
-    $filtered_requests = array_filter($requests, fn($time) => $time > ($current_time - 3600));
+  try {
+    // Clean up old retry records
+    $connection = \Drupal::database();
+    $old_retry_keys = $connection->select('key_value', 'kv')
+      ->fields('kv', ['name'])
+      ->condition('collection', 'state')
+      ->condition('name', 'dataverse_webform:retry:%', 'LIKE')
+      ->condition('value', serialize($cutoff_time), '<')
+      ->execute()
+      ->fetchCol();
     
-    if (empty($filtered_requests)) {
+    foreach ($old_retry_keys as $key) {
       $state->delete($key);
-    } else {
-      $state->set($key, $filtered_requests);
     }
+    
+    // Clean up old rate limit records
+    $rate_limit_keys = $connection->select('key_value', 'kv')
+      ->fields('kv', ['name'])
+      ->condition('collection', 'state')
+      ->condition('name', 'dataverse_webform:rate_limit:%', 'LIKE')
+      ->execute()
+      ->fetchCol();
+    
+    foreach ($rate_limit_keys as $key) {
+      $requests = $state->get($key, []);
+      $filtered_requests = array_filter($requests, fn($time) => $time > ($current_time - 3600));
+      
+      if (empty($filtered_requests)) {
+        $state->delete($key);
+      } else {
+        $state->set($key, $filtered_requests);
+      }
+    }
+  } catch (\Exception $e) {
+    \Drupal::logger('dataverse_webform')->warning(
+      'Error during cleanup: @error',
+      ['@error' => $e->getMessage()]
+    );
   }
 }

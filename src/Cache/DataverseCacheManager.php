@@ -13,10 +13,11 @@ use Drupal\Core\Logger\LoggerChannelFactoryInterface;
 class DataverseCacheManager {
 
   public const CACHE_BIN = 'dataverse_webform';
-  public const DEFAULT_TTL = 3600;
-  public const SHORT_TTL = 300;
-  public const LONG_TTL = 14400;
+  public const DEFAULT_TTL = 3600; // 1 hour
+  public const SHORT_TTL = 300;    // 5 minutes
+  public const LONG_TTL = 14400;   // 4 hours
   public const MAX_CACHE_ENTRIES = 1000;
+  public const CACHE_KEY_MAX_LENGTH = 255;
 
   protected CacheBackendInterface $cache;
   protected ConfigFactoryInterface $configFactory;
@@ -146,6 +147,14 @@ class DataverseCacheManager {
   }
 
   protected function getCachedData(string $cache_key) {
+    if (strlen($cache_key) > self::CACHE_KEY_MAX_LENGTH) {
+      $this->loggerFactory->get('dataverse_webform')->warning(
+        'Cache key exceeds maximum length: @key',
+        ['@key' => substr($cache_key, 0, 50) . '...']
+      );
+      return null;
+    }
+
     $cached = $this->cache->get($cache_key);
     
     if ($cached) {
@@ -158,6 +167,14 @@ class DataverseCacheManager {
   }
 
   protected function setCachedData(string $cache_key, $data, array $cache_tags, int $ttl): void {
+    if (strlen($cache_key) > self::CACHE_KEY_MAX_LENGTH) {
+      $this->loggerFactory->get('dataverse_webform')->warning(
+        'Cannot cache data - key exceeds maximum length: @key',
+        ['@key' => substr($cache_key, 0, 50) . '...']
+      );
+      return;
+    }
+
     if (is_array($data) && count($data) > self::MAX_CACHE_ENTRIES) {
       $this->loggerFactory->get('dataverse_webform')->warning(
         'Large cache entry (@count items) may impact performance',
@@ -170,19 +187,23 @@ class DataverseCacheManager {
   }
 
   protected function buildEntitiesCacheKey(array $config): string {
-    return 'dataverse_webform:entities:' . $this->generateConfigHash($this->extractCacheableConfig($config));
+    $cache_config = $this->extractCacheableConfig($config);
+    return 'dataverse_webform:entities:' . $this->generateConfigHash($cache_config);
   }
 
   protected function buildFieldsCacheKey(array $config, string $entity_name): string {
-    return 'dataverse_webform:fields:' . $entity_name . ':' . $this->generateConfigHash($this->extractCacheableConfig($config));
+    $cache_config = $this->extractCacheableConfig($config);
+    return 'dataverse_webform:fields:' . $entity_name . ':' . $this->generateConfigHash($cache_config);
   }
 
   protected function buildTokenValidationCacheKey(array $config): string {
-    return 'dataverse_webform:token_validation:' . $this->generateConfigHash($this->extractAuthConfig($config));
+    $auth_config = $this->extractAuthConfig($config);
+    return 'dataverse_webform:token_validation:' . $this->generateConfigHash($auth_config);
   }
 
   protected function buildConfigValidationCacheKey(array $config): string {
-    return 'dataverse_webform:config_validation:' . $this->generateConfigHash($this->extractValidationConfig($config));
+    $validation_config = $this->extractValidationConfig($config);
+    return 'dataverse_webform:config_validation:' . $this->generateConfigHash($validation_config);
   }
 
   protected function buildEntitiesCacheTags(array $config): array {
@@ -257,4 +278,5 @@ class DataverseCacheManager {
     $count = $this->getCacheMissCount() + 1;
     \Drupal::state()->set('dataverse_webform:cache_misses', $count);
   }
+
 }

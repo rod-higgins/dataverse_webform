@@ -2,10 +2,23 @@
 
 namespace Drupal\dataverse_webform\Exception;
 
+use Psr\Http\Message\ResponseInterface;
+
 /**
  * Exception thrown for Dataverse-related errors.
  */
 class DataverseException extends \Exception {
+
+  public const SEVERITY_CRITICAL = 'critical';
+  public const SEVERITY_ERROR = 'error';
+  public const SEVERITY_WARNING = 'warning';
+  public const SEVERITY_INFO = 'info';
+
+  public const ERROR_TYPE_AUTH = 'authentication_error';
+  public const ERROR_TYPE_CONFIG = 'configuration_error';
+  public const ERROR_TYPE_VALIDATION = 'validation_error';
+  public const ERROR_TYPE_NETWORK = 'network_error';
+  public const ERROR_TYPE_RATE_LIMIT = 'rate_limit_exceeded';
 
   protected ?string $dataverseErrorCode;
   protected array $context;
@@ -33,7 +46,7 @@ class DataverseException extends \Exception {
   public function isAuthenticationError(): bool {
     $auth_codes = [
       'unauthorized', 'invalid_token', 'token_expired', 
-      'invalid_client', 'invalid_grant', 'authentication_error'
+      'invalid_client', 'invalid_grant', self::ERROR_TYPE_AUTH
     ];
     
     return in_array($this->dataverseErrorCode, $auth_codes) || 
@@ -42,13 +55,13 @@ class DataverseException extends \Exception {
 
   public function isRateLimitError(): bool {
     return $this->getCode() === 429 || 
-           $this->dataverseErrorCode === 'rate_limit_exceeded' ||
+           $this->dataverseErrorCode === self::ERROR_TYPE_RATE_LIMIT ||
            $this->containsRateLimitKeywords();
   }
 
   public function isValidationError(): bool {
     $validation_codes = [
-      'invalid_request', 'validation_error', 'bad_request', 'configuration_error'
+      'invalid_request', self::ERROR_TYPE_VALIDATION, 'bad_request', self::ERROR_TYPE_CONFIG
     ];
     
     return $this->getCode() === 400 ||
@@ -71,7 +84,7 @@ class DataverseException extends \Exception {
 
   public function isNetworkError(): bool {
     $network_codes = [
-      'network_error', 'connection_timeout', 'dns_error', 'ssl_error'
+      self::ERROR_TYPE_NETWORK, 'connection_timeout', 'dns_error', 'ssl_error'
     ];
     
     return in_array($this->dataverseErrorCode, $network_codes) ||
@@ -80,22 +93,22 @@ class DataverseException extends \Exception {
 
   public function getSeverity(): string {
     if ($this->isAuthenticationError()) {
-      return 'critical';
+      return self::SEVERITY_CRITICAL;
     }
     
     if ($this->isValidationError()) {
-      return 'error';
+      return self::SEVERITY_ERROR;
     }
     
     if ($this->isRateLimitError() || $this->isNetworkError()) {
-      return 'warning';
+      return self::SEVERITY_WARNING;
     }
     
     if ($this->getCode() >= 500) {
-      return 'error';
+      return self::SEVERITY_ERROR;
     }
     
-    return 'info';
+    return self::SEVERITY_INFO;
   }
 
   public function getFormattedMessage(): string {
@@ -112,7 +125,16 @@ class DataverseException extends \Exception {
     return $message;
   }
 
-  public static function fromHttpResponse($response, string $operation = 'request'): self {
+  public function getLogContext(): array {
+    return array_merge($this->context, [
+      'exception_type' => get_class($this),
+      'error_code' => $this->dataverseErrorCode,
+      'severity' => $this->getSeverity(),
+      'is_retryable' => $this->isRetryable(),
+    ]);
+  }
+
+  public static function fromHttpResponse(ResponseInterface $response, string $operation = 'request'): self {
     $status_code = $response->getStatusCode();
     $body = $response->getBody()->getContents();
     
@@ -140,7 +162,7 @@ class DataverseException extends \Exception {
       "Configuration error: {$message}",
       0,
       null,
-      'configuration_error',
+      self::ERROR_TYPE_CONFIG,
       $context
     );
   }
@@ -150,7 +172,7 @@ class DataverseException extends \Exception {
       "Authentication error: {$message}",
       401,
       null,
-      'authentication_error',
+      self::ERROR_TYPE_AUTH,
       $context
     );
   }
@@ -160,7 +182,7 @@ class DataverseException extends \Exception {
       "Validation error: {$message}",
       400,
       null,
-      'validation_error',
+      self::ERROR_TYPE_VALIDATION,
       $context
     );
   }
@@ -170,7 +192,7 @@ class DataverseException extends \Exception {
       "Network error: {$message}",
       0,
       null,
-      'network_error',
+      self::ERROR_TYPE_NETWORK,
       $context
     );
   }
@@ -180,7 +202,7 @@ class DataverseException extends \Exception {
       "Rate limit error: {$message}",
       429,
       null,
-      'rate_limit_exceeded',
+      self::ERROR_TYPE_RATE_LIMIT,
       $context
     );
   }
@@ -200,7 +222,7 @@ class DataverseException extends \Exception {
   }
 
   protected function containsAuthenticationKeywords(): bool {
-    $keywords = ['authentication', 'unauthorized', 'access denied', 'invalid credentials'];
+    $keywords = ['authentication', 'unauthorized', 'access denied', 'invalid credentials', 'forbidden'];
     return $this->containsKeywords($keywords);
   }
 
@@ -210,12 +232,12 @@ class DataverseException extends \Exception {
   }
 
   protected function containsValidationKeywords(): bool {
-    $keywords = ['validation', 'invalid', 'bad request', 'malformed'];
+    $keywords = ['validation', 'invalid', 'bad request', 'malformed', 'required field'];
     return $this->containsKeywords($keywords);
   }
 
   protected function containsNetworkKeywords(): bool {
-    $keywords = ['network', 'connection', 'timeout', 'dns', 'ssl', 'certificate'];
+    $keywords = ['network', 'connection', 'timeout', 'dns', 'ssl', 'certificate', 'host'];
     return $this->containsKeywords($keywords);
   }
 
@@ -230,4 +252,5 @@ class DataverseException extends \Exception {
     
     return false;
   }
+
 }

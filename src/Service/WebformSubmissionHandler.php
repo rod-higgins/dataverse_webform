@@ -20,6 +20,8 @@ class WebformSubmissionHandler {
   public const QUEUE_NAME = 'dataverse_webform_submissions';
   public const MEMORY_THRESHOLD = 134217728; // 128MB
   public const TIME_THRESHOLD = 25;
+  public const MAX_SERIALIZED_SIZE = 50000;
+  public const MAX_ENTITY_COUNT = 3;
 
   protected DataverseClientInterface $dataverseClient;
   protected LoggerChannelFactoryInterface $loggerFactory;
@@ -165,12 +167,12 @@ class WebformSubmissionHandler {
     $field_mappings = $dataverse_config['field_mappings'] ?? [];
     $entity_count = count(array_unique(array_column($field_mappings, 'entity')));
     
-    if ($entity_count > 3) {
+    if ($entity_count > self::MAX_ENTITY_COUNT) {
       return false;
     }
 
     $submission_data = $webform_submission->getData();
-    return strlen(serialize($submission_data)) <= 50000;
+    return strlen(serialize($submission_data)) <= self::MAX_SERIALIZED_SIZE;
   }
 
   protected function validateSubmissionPreProcessing(WebformSubmissionInterface $webform_submission, array $dataverse_config): void {
@@ -343,4 +345,5 @@ class WebformSubmissionHandler {
       'last_updated' => time(),
     ];
   }
+
 }

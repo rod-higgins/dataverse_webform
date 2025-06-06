@@ -9,6 +9,11 @@ use Drupal\Core\Logger\LoggerChannelFactoryInterface;
  */
 class SubmissionProcessor {
 
+  public const ARRAY_SEPARATOR = '; ';
+  public const MAX_PHONE_LENGTH = 50;
+  public const TRUE_VALUES = ['true', 'yes', 'on', '1', 'enabled', 'active'];
+  public const FALSE_VALUES = ['false', 'no', 'off', '0', 'disabled', 'inactive'];
+
   protected LoggerChannelFactoryInterface $loggerFactory;
   protected ValidationService $validator;
 
@@ -117,7 +122,7 @@ class SubmissionProcessor {
 
   protected function transformArrayToString(array $value): ?string {
     $filtered_values = array_filter($value, fn($item) => $item !== null && $item !== '');
-    return !empty($filtered_values) ? implode('; ', $filtered_values) : null;
+    return !empty($filtered_values) ? implode(self::ARRAY_SEPARATOR, $filtered_values) : null;
   }
 
   protected function transformToNumber($value) {
@@ -154,14 +159,11 @@ class SubmissionProcessor {
   protected function parseStringToBoolean(string $value): ?bool {
     $value = strtolower(trim($value));
     
-    $true_values = ['true', 'yes', 'on', '1', 'enabled', 'active'];
-    $false_values = ['false', 'no', 'off', '0', 'disabled', 'inactive'];
-
-    if (in_array($value, $true_values)) {
+    if (in_array($value, self::TRUE_VALUES)) {
       return true;
     }
     
-    if (in_array($value, $false_values)) {
+    if (in_array($value, self::FALSE_VALUES)) {
       return false;
     }
 
@@ -181,8 +183,8 @@ class SubmissionProcessor {
       return $date->format('c');
     } catch (\Exception $e) {
       $this->loggerFactory->get('dataverse_webform')->warning(
-        'Failed to parse date value: @value',
-        ['@value' => $value]
+        'Failed to parse date value: @value - @error',
+        ['@value' => $value, '@error' => $e->getMessage()]
       );
       return null;
     }
@@ -203,7 +205,10 @@ class SubmissionProcessor {
     
     if ($phone) {
       $cleaned = preg_replace('/[^0-9+\s()-]/', '', $phone);
-      return !empty($cleaned) ? $cleaned : null;
+      // Limit phone number length for database constraints
+      if (!empty($cleaned) && strlen($cleaned) <= self::MAX_PHONE_LENGTH) {
+        return $cleaned;
+      }
     }
 
     return null;
@@ -291,4 +296,5 @@ class SubmissionProcessor {
     // Skip null, empty string, or empty array
     return $value === null || $value === '' || (is_array($value) && empty($value));
   }
+
 }

@@ -13,6 +13,7 @@ function dataverse_webform_requirements($phase) {
 
   if ($phase === 'install') {
     $requirements += dataverse_webform_check_module_dependencies();
+    $requirements += dataverse_webform_check_php_requirements();
   }
 
   if ($phase === 'runtime') {
@@ -28,36 +29,50 @@ function dataverse_webform_requirements($phase) {
  * Implements hook_install().
  */
 function dataverse_webform_install() {
-  $config = \Drupal::configFactory()->getEditable('dataverse_webform.settings');
-  $config->setMultiple([
-    'default_timeout' => 30,
-    'default_batch_size' => 10,
-    'default_retry_attempts' => 3,
-    'cache_entity_metadata_hours' => 1,
-    'rate_limit_requests_per_hour' => 100,
-    'rate_limit_enabled' => true,
-    'cache_tags_enabled' => true,
-    'force_queue_processing' => false,
-  ])->save();
-  
-  \Drupal::messenger()->addStatus(t('Dataverse Webform Integration module installed successfully. Configure your Azure AD credentials using the <a href="@url">Key module</a>.', [
-    '@url' => \Drupal::url('entity.key.collection'),
-  ]));
+  try {
+    $config = \Drupal::configFactory()->getEditable('dataverse_webform.settings');
+    $config->setMultiple([
+      'default_timeout' => 30,
+      'default_batch_size' => 10,
+      'default_retry_attempts' => 3,
+      'cache_entity_metadata_hours' => 1,
+      'rate_limit_requests_per_hour' => 100,
+      'rate_limit_enabled' => true,
+      'cache_tags_enabled' => true,
+      'force_queue_processing' => false,
+    ])->save();
+    
+    \Drupal::messenger()->addStatus(t('Dataverse Webform Integration module installed successfully. Configure your Azure AD credentials using the <a href="@url">Key module</a>.', [
+      '@url' => \Drupal::url('entity.key.collection'),
+    ]));
+  } catch (\Exception $e) {
+    \Drupal::logger('dataverse_webform')->error(
+      'Error during module installation: @error',
+      ['@error' => $e->getMessage()]
+    );
+    throw $e;
+  }
 }
 
 /**
  * Implements hook_uninstall().
  */
 function dataverse_webform_uninstall() {
-  dataverse_webform_clean_webform_settings();
-  dataverse_webform_clean_cache_and_state();
-  
-  \Drupal::configFactory()->getEditable('dataverse_webform.settings')->delete();
-  
-  \Drupal::messenger()->addStatus(t('Dataverse Webform Integration module uninstalled. All configuration and cached data removed.'));
+  try {
+    dataverse_webform_clean_webform_settings();
+    dataverse_webform_clean_cache_and_state();
+    
+    \Drupal::configFactory()->getEditable('dataverse_webform.settings')->delete();
+    
+    \Drupal::messenger()->addStatus(t('Dataverse Webform Integration module uninstalled. All configuration and cached data removed.'));
+  } catch (\Exception $e) {
+    \Drupal::logger('dataverse_webform')->error(
+      'Error during module uninstallation: @error',
+      ['@error' => $e->getMessage()]
+    );
+    // Don't throw exception during uninstall as it prevents module removal
+  }
 }
-
-
 
 /**
  * Check module dependencies.
@@ -90,15 +105,17 @@ function dataverse_webform_check_module_dependencies(): array {
 function dataverse_webform_check_php_requirements(): array {
   $requirements = [];
   
+  // Check required PHP extensions
   $php_checks = [
     ['curl_init', 'cURL not available', 'cURL is required for HTTP communication', REQUIREMENT_ERROR],
     ['openssl_encrypt', 'OpenSSL extension not available', 'OpenSSL is required for secure communication', REQUIREMENT_ERROR],
     ['json_encode', 'JSON extension not available', 'JSON extension is required for API communication', REQUIREMENT_ERROR],
+    ['hash', 'Hash extension not available', 'Hash extension is required for caching', REQUIREMENT_ERROR],
   ];
   
   foreach ($php_checks as [$function, $title, $description, $severity]) {
     if (!function_exists($function)) {
-      $requirements['dataverse_webform_' . str_replace('_', '', $function)] = [
+      $requirements['dataverse_webform_' . str_replace(['_', 'openssl_'], ['', 'openssl'], $function)] = [
         'title' => t('Dataverse Webform Integration'),
         'value' => t($title),
         'description' => t($description),
@@ -107,13 +124,28 @@ function dataverse_webform_check_php_requirements(): array {
     }
   }
   
-  if (version_compare(PHP_VERSION, '7.4', '<')) {
+  // Check PHP version
+  if (version_compare(PHP_VERSION, '8.0', '<')) {
     $requirements['dataverse_webform_php'] = [
       'title' => t('Dataverse Webform Integration'),
-      'value' => t('PHP version too old'),
-      'description' => t('PHP 7.4+ is recommended for optimal performance.'),
+      'value' => t('PHP version @version', ['@version' => PHP_VERSION]),
+      'description' => t('PHP 8.0+ is recommended for optimal performance and security.'),
       'severity' => REQUIREMENT_WARNING,
     ];
+  }
+
+  // Check memory limit
+  $memory_limit = ini_get('memory_limit');
+  if ($memory_limit !== '-1') {
+    $memory_bytes = dataverse_webform_parse_size($memory_limit);
+    if ($memory_bytes < 128 * 1024 * 1024) { // 128MB
+      $requirements['dataverse_webform_memory'] = [
+        'title' => t('Dataverse Webform Integration'),
+        'value' => t('PHP memory limit: @limit', ['@limit' => $memory_limit]),
+        'description' => t('At least 128MB of memory is recommended for processing Dataverse submissions.'),
+        'severity' => REQUIREMENT_WARNING,
+      ];
+    }
   }
   
   return $requirements;
@@ -125,26 +157,35 @@ function dataverse_webform_check_php_requirements(): array {
 function dataverse_webform_check_webform_configurations(): array {
   $requirements = [];
   
-  $configured_webforms = dataverse_webform_get_configured_webforms();
-  if (!empty($configured_webforms)) {
-    $count = count($configured_webforms);
-    $requirements['dataverse_webform_configured'] = [
+  try {
+    $configured_webforms = dataverse_webform_get_configured_webforms();
+    if (!empty($configured_webforms)) {
+      $count = count($configured_webforms);
+      $requirements['dataverse_webform_configured'] = [
+        'title' => t('Dataverse Webform Integration'),
+        'value' => t('@count webform(s) configured', ['@count' => $count]),
+        'description' => t('Dataverse integration is active on: @forms', [
+          '@forms' => implode(', ', array_keys($configured_webforms)),
+        ]),
+        'severity' => REQUIREMENT_INFO,
+      ];
+    }
+    
+    $config_issues = dataverse_webform_check_configuration_issues();
+    if (!empty($config_issues)) {
+      $requirements['dataverse_webform_config_issues'] = [
+        'title' => t('Dataverse Webform Integration'),
+        'value' => t('Configuration issues detected'),
+        'description' => t('Issues found: @issues', ['@issues' => implode(', ', $config_issues)]),
+        'severity' => REQUIREMENT_WARNING,
+      ];
+    }
+  } catch (\Exception $e) {
+    $requirements['dataverse_webform_check_error'] = [
       'title' => t('Dataverse Webform Integration'),
-      'value' => t('@count webform(s) configured', ['@count' => $count]),
-      'description' => t('Dataverse integration is active on: @forms', [
-        '@forms' => implode(', ', array_keys($configured_webforms)),
-      ]),
-      'severity' => REQUIREMENT_INFO,
-    ];
-  }
-  
-  $config_issues = dataverse_webform_check_configuration_issues();
-  if (!empty($config_issues)) {
-    $requirements['dataverse_webform_config_issues'] = [
-      'title' => t('Dataverse Webform Integration'),
-      'value' => t('Configuration issues detected'),
-      'description' => t('Issues found: @issues', ['@issues' => implode(', ', $config_issues)]),
-      'severity' => REQUIREMENT_WARNING,
+      'value' => t('Error checking configurations'),
+      'description' => t('Error: @error', ['@error' => $e->getMessage()]),
+      'severity' => REQUIREMENT_ERROR,
     ];
   }
   
@@ -159,9 +200,16 @@ function dataverse_webform_get_configured_webforms(): array {
   $configured_webforms = [];
   
   foreach ($webforms as $webform) {
-    $dataverse_config = $webform->getThirdPartySetting('dataverse_webform', 'dataverse_config');
-    if (!empty($dataverse_config['enabled'])) {
-      $configured_webforms[$webform->id()] = $webform->label();
+    try {
+      $dataverse_config = $webform->getThirdPartySetting('dataverse_webform', 'dataverse_config');
+      if (!empty($dataverse_config['enabled'])) {
+        $configured_webforms[$webform->id()] = $webform->label();
+      }
+    } catch (\Exception $e) {
+      \Drupal::logger('dataverse_webform')->warning(
+        'Error checking webform @id configuration: @error',
+        ['@id' => $webform->id(), '@error' => $e->getMessage()]
+      );
     }
   }
   
@@ -176,10 +224,15 @@ function dataverse_webform_check_configuration_issues(): array {
   $webforms = \Drupal::entityTypeManager()->getStorage('webform')->loadMultiple();
   
   foreach ($webforms as $webform) {
-    $dataverse_config = $webform->getThirdPartySetting('dataverse_webform', 'dataverse_config');
-    
-    if (!empty($dataverse_config['enabled'])) {
-      $issues = array_merge($issues, dataverse_webform_validate_webform_config($webform, $dataverse_config));
+    try {
+      $dataverse_config = $webform->getThirdPartySetting('dataverse_webform', 'dataverse_config');
+      
+      if (!empty($dataverse_config['enabled'])) {
+        $webform_issues = dataverse_webform_validate_webform_config($webform, $dataverse_config);
+        $issues = array_merge($issues, $webform_issues);
+      }
+    } catch (\Exception $e) {
+      $issues[] = "Webform {$webform->id()}: error validating configuration - {$e->getMessage()}";
     }
   }
   
@@ -207,29 +260,67 @@ function dataverse_webform_validate_webform_config($webform, array $config): arr
   }
   
   // Validate keys
-  $key_repository = \Drupal::service('key.repository');
-  foreach (['azure_client_id_key', 'azure_client_secret_key'] as $key_field) {
-    if (!empty($config[$key_field]) && !$key_repository->getKey($config[$key_field])) {
-      $issues[] = "Webform {$webform_id}: {$key_field} not found";
+  try {
+    $key_repository = \Drupal::service('key.repository');
+    foreach (['azure_client_id_key', 'azure_client_secret_key'] as $key_field) {
+      if (!empty($config[$key_field])) {
+        $key = $key_repository->getKey($config[$key_field]);
+        if (!$key) {
+          $issues[] = "Webform {$webform_id}: {$key_field} not found";
+        } elseif (empty($key->getKeyValue())) {
+          $issues[] = "Webform {$webform_id}: {$key_field} has no value";
+        }
+      }
+    }
+  } catch (\Exception $e) {
+    $issues[] = "Webform {$webform_id}: error validating keys - {$e->getMessage()}";
+  }
+  
+  // Validate URLs
+  if (!empty($config['dataverse_url'])) {
+    if (!filter_var($config['dataverse_url'], FILTER_VALIDATE_URL) || 
+        !str_starts_with($config['dataverse_url'], 'https://')) {
+      $issues[] = "Webform {$webform_id}: invalid Dataverse URL";
+    }
+  }
+  
+  // Validate GUID format for tenant ID
+  if (!empty($config['azure_tenant_id'])) {
+    if (!preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $config['azure_tenant_id'])) {
+      $issues[] = "Webform {$webform_id}: invalid Azure Tenant ID format";
     }
   }
   
   return $issues;
 }
 
-
-
 /**
  * Clean webform third-party settings.
  */
 function dataverse_webform_clean_webform_settings(): void {
-  $webforms = \Drupal::entityTypeManager()->getStorage('webform')->loadMultiple();
-  
-  foreach ($webforms as $webform) {
-    if ($webform->getThirdPartySetting('dataverse_webform', 'dataverse_config')) {
-      $webform->unsetThirdPartySetting('dataverse_webform', 'dataverse_config');
-      $webform->save();
+  try {
+    $webforms = \Drupal::entityTypeManager()->getStorage('webform')->loadMultiple();
+    $cleaned_count = 0;
+    
+    foreach ($webforms as $webform) {
+      if ($webform->getThirdPartySetting('dataverse_webform', 'dataverse_config')) {
+        $webform->unsetThirdPartySetting('dataverse_webform', 'dataverse_config');
+        $webform->save();
+        $cleaned_count++;
+      }
     }
+    
+    if ($cleaned_count > 0) {
+      \Drupal::logger('dataverse_webform')->info(
+        'Cleaned Dataverse settings from @count webforms',
+        ['@count' => $cleaned_count]
+      );
+    }
+  } catch (\Exception $e) {
+    \Drupal::logger('dataverse_webform')->error(
+      'Error cleaning webform settings: @error',
+      ['@error' => $e->getMessage()]
+    );
   }
 }
 
@@ -237,27 +328,53 @@ function dataverse_webform_clean_webform_settings(): void {
  * Clean cache and state entries.
  */
 function dataverse_webform_clean_cache_and_state(): void {
-  // Clear caches
-  \Drupal::cache('default')->invalidateTags(['dataverse_webform']);
+  try {
+    // Clear caches
+    \Drupal::cache('default')->invalidateTags(['dataverse_webform']);
+    
+    // Clear state entries
+    $state = \Drupal::state();
+    $keys_to_delete = [];
+    
+    // Get all state keys that start with our prefix
+    $connection = \Drupal::database();
+    $result = $connection->select('key_value', 'kv')
+      ->fields('kv', ['name'])
+      ->condition('collection', 'state')
+      ->condition('name', 'dataverse_webform%', 'LIKE')
+      ->execute();
+    
+    foreach ($result as $row) {
+      $keys_to_delete[] = $row->name;
+    }
+    
+    // Delete state entries
+    foreach ($keys_to_delete as $key) {
+      $state->delete($key);
+    }
+    
+    \Drupal::logger('dataverse_webform')->info(
+      'Cleaned @count state entries',
+      ['@count' => count($keys_to_delete)]
+    );
+  } catch (\Exception $e) {
+    \Drupal::logger('dataverse_webform')->error(
+      'Error cleaning cache and state: @error',
+      ['@error' => $e->getMessage()]
+    );
+  }
+}
+
+/**
+ * Parse size string to bytes.
+ */
+function dataverse_webform_parse_size(string $size): int {
+  $unit = preg_replace('/[^bkmgtpezy]/i', '', $size);
+  $size = preg_replace('/[^0-9\.]/', '', $size);
   
-  // Clear state entries
-  $state = \Drupal::state();
-  $keys_to_delete = [];
-  
-  // Get all state keys that start with our prefix
-  $connection = \Drupal::database();
-  $result = $connection->select('key_value', 'kv')
-    ->fields('kv', ['name'])
-    ->condition('collection', 'state')
-    ->condition('name', 'dataverse_webform%', 'LIKE')
-    ->execute();
-  
-  foreach ($result as $row) {
-    $keys_to_delete[] = $row->name;
+  if ($unit) {
+    return round($size * pow(1024, stripos('bkmgtpezy', $unit[0])));
   }
   
-  // Delete state entries
-  foreach ($keys_to_delete as $key) {
-    $state->delete($key);
-  }
+  return round($size);
 }

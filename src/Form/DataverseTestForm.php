@@ -14,6 +14,14 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
  */
 class DataverseTestForm extends FormBase {
 
+  public const DEFAULT_TIMEOUT = 30;
+  public const DEFAULT_BATCH_SIZE = 5;
+  public const MIN_TIMEOUT = 5;
+  public const MAX_TIMEOUT = 300;
+  public const MIN_BATCH_SIZE = 1;
+  public const MAX_BATCH_SIZE = 20;
+  public const TEST_ENTITIES = ['contacts', 'accounts', 'leads', 'opportunities'];
+
   protected DataverseClientInterface $dataverseClient;
   protected ConfigurationManager $configManager;
 
@@ -66,8 +74,7 @@ class DataverseTestForm extends FormBase {
 
   public function testFields(array &$form, FormStateInterface $form_state): void {
     $this->runTest(function($config) {
-      $test_entities = ['contacts', 'accounts', 'leads', 'opportunities'];
-      return $this->testFieldsForEntities($config, $test_entities);
+      return $this->testFieldsForEntities($config, self::TEST_ENTITIES);
     }, 'Field retrieval', $form_state);
   }
 
@@ -103,31 +110,27 @@ class DataverseTestForm extends FormBase {
 
     $key_options = $this->configManager->getAzureCredentialKeys();
 
-    $azure_fields = [
-      'azure_tenant_id' => [
-        '#type' => 'textfield',
-        '#title' => $this->t('Azure Tenant ID'),
-        '#pattern' => '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',
-        '#attributes' => ['placeholder' => 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'],
-        '#required' => true,
-      ],
-      'azure_client_id_key' => [
-        '#type' => 'select',
-        '#title' => $this->t('Azure Client ID Key'),
-        '#options' => $key_options,
-        '#required' => true,
-      ],
-      'azure_client_secret_key' => [
-        '#type' => 'select',
-        '#title' => $this->t('Azure Client Secret Key'),
-        '#options' => $key_options,
-        '#required' => true,
-      ],
+    $form['azure_config']['azure_tenant_id'] = [
+      '#type' => 'textfield',
+      '#title' => $this->t('Azure Tenant ID'),
+      '#pattern' => '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',
+      '#attributes' => ['placeholder' => 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'],
+      '#required' => true,
     ];
 
-    foreach ($azure_fields as $key => $field) {
-      $form['azure_config'][$key] = $field;
-    }
+    $form['azure_config']['azure_client_id_key'] = [
+      '#type' => 'select',
+      '#title' => $this->t('Azure Client ID Key'),
+      '#options' => $key_options,
+      '#required' => true,
+    ];
+
+    $form['azure_config']['azure_client_secret_key'] = [
+      '#type' => 'select',
+      '#title' => $this->t('Azure Client Secret Key'),
+      '#options' => $key_options,
+      '#required' => true,
+    ];
   }
 
   protected function buildDataverseSection(array &$form): void {
@@ -153,26 +156,21 @@ class DataverseTestForm extends FormBase {
       '#open' => true,
     ];
 
-    $test_fields = [
-      'timeout' => [
-        '#type' => 'number',
-        '#title' => $this->t('Request Timeout (seconds)'),
-        '#default_value' => 30,
-        '#min' => 5,
-        '#max' => 300,
-      ],
-      'batch_size' => [
-        '#type' => 'number',
-        '#title' => $this->t('Batch Size'),
-        '#default_value' => 5,
-        '#min' => 1,
-        '#max' => 20,
-      ],
+    $form['test_config']['timeout'] = [
+      '#type' => 'number',
+      '#title' => $this->t('Request Timeout (seconds)'),
+      '#default_value' => self::DEFAULT_TIMEOUT,
+      '#min' => self::MIN_TIMEOUT,
+      '#max' => self::MAX_TIMEOUT,
     ];
 
-    foreach ($test_fields as $key => $field) {
-      $form['test_config'][$key] = $field;
-    }
+    $form['test_config']['batch_size'] = [
+      '#type' => 'number',
+      '#title' => $this->t('Batch Size'),
+      '#default_value' => self::DEFAULT_BATCH_SIZE,
+      '#min' => self::MIN_BATCH_SIZE,
+      '#max' => self::MAX_BATCH_SIZE,
+    ];
 
     $form['test_results'] = [
       '#type' => 'container',
@@ -333,4 +331,5 @@ class DataverseTestForm extends FormBase {
     }
     return $method;
   }
+
 }

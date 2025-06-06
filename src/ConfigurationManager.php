@@ -10,6 +10,14 @@ use Drupal\dataverse_webform\Exception\DataverseException;
  */
 class ConfigurationManager {
 
+  public const DEFAULT_TIMEOUT = 30;
+  public const DEFAULT_BATCH_SIZE = 10;
+  public const DEFAULT_RETRY_ATTEMPTS = 3;
+  public const MIN_TIMEOUT = 5;
+  public const MAX_TIMEOUT = 300;
+  public const MIN_BATCH_SIZE = 1;
+  public const MAX_BATCH_SIZE = 100;
+
   protected KeyRepositoryInterface $keyRepository;
   protected ValidationService $validator;
 
@@ -72,9 +80,9 @@ class ConfigurationManager {
       'dataverse_url' => '',
       'field_mappings' => [],
       'submission_order' => [],
-      'batch_size' => 10,
-      'retry_attempts' => 3,
-      'timeout' => 30,
+      'batch_size' => self::DEFAULT_BATCH_SIZE,
+      'retry_attempts' => self::DEFAULT_RETRY_ATTEMPTS,
+      'timeout' => self::DEFAULT_TIMEOUT,
       'stop_on_error' => true,
     ];
   }
@@ -126,9 +134,12 @@ class ConfigurationManager {
 
     try {
       $this->validator->validateConfig($config);
-    } catch (\Exception $e) {
+    } catch (DataverseException $e) {
       $results['valid'] = false;
       $results['errors'][] = $e->getMessage();
+    } catch (\Exception $e) {
+      $results['valid'] = false;
+      $results['errors'][] = 'Unexpected validation error: ' . $e->getMessage();
     }
 
     $this->validateKeys($config, $results);
@@ -255,6 +266,15 @@ class ConfigurationManager {
         $this->checkForCircularDependencies($config['field_mappings'], $results);
       }
     }
+
+    // Add warnings for potentially problematic settings
+    if (isset($config['timeout']) && $config['timeout'] > 120) {
+      $results['warnings'][] = 'Request timeout is set very high (' . $config['timeout'] . 's). This may cause performance issues.';
+    }
+
+    if (isset($config['batch_size']) && $config['batch_size'] > 50) {
+      $results['warnings'][] = 'Batch size is set very high (' . $config['batch_size'] . '). This may cause memory or timeout issues.';
+    }
   }
 
   protected function checkForCircularDependencies(array $field_mappings, array &$results): void {
@@ -275,4 +295,5 @@ class ConfigurationManager {
       }
     }
   }
+
 }

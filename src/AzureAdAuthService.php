@@ -9,6 +9,7 @@ use Drupal\Core\Lock\LockBackendInterface;
 use Drupal\key\KeyRepositoryInterface;
 use Drupal\dataverse_webform\Exception\DataverseException;
 use GuzzleHttp\Exception\RequestException;
+use Psr\Http\Message\ResponseInterface;
 
 /**
  * Azure AD authentication service for Dataverse.
@@ -20,6 +21,7 @@ class AzureAdAuthService {
   public const MAX_TOKEN_LIFETIME = 86400;
   public const LOCK_TIMEOUT = 30;
   public const LOCK_WAIT_TIME = 500000; // 500ms in microseconds
+  public const DEFAULT_REQUEST_TIMEOUT = 30;
 
   protected ClientFactory $httpClientFactory;
   protected LoggerChannelFactoryInterface $loggerFactory;
@@ -169,8 +171,8 @@ class AzureAdAuthService {
     return $token;
   }
 
-  protected function makeTokenRequest(array $config, array $credentials): \Psr\Http\Message\ResponseInterface {
-    $client = $this->httpClientFactory->fromOptions(['timeout' => 30]);
+  protected function makeTokenRequest(array $config, array $credentials): ResponseInterface {
+    $client = $this->httpClientFactory->fromOptions(['timeout' => self::DEFAULT_REQUEST_TIMEOUT]);
     $oauth_url = sprintf(self::OAUTH_ENDPOINT_TEMPLATE, $credentials['tenant_id']);
     
     return $client->post($oauth_url, [
@@ -188,13 +190,13 @@ class AzureAdAuthService {
     $error = $body['error'] ?? 'unknown_error';
     $error_description = $body['error_description'] ?? 'No error description provided';
     
-    throw new DataverseException("Azure AD authentication failed: {$error} - {$error_description}");
+    throw DataverseException::authenticationError("{$error} - {$error_description}");
   }
 
   protected function handleRequestException(RequestException $e): void {
     $error_message = 'Azure AD authentication request failed: ' . $e->getMessage();
     $this->loggerFactory->get('dataverse_webform')->error($error_message);
-    throw new DataverseException($error_message, 0, $e);
+    throw DataverseException::networkError($error_message, ['previous' => $e]);
   }
 
   protected function logSuccessfulTokenRefresh(int $expires_in): void {
@@ -210,7 +212,7 @@ class AzureAdAuthService {
     $tenant_id = $config['azure_tenant_id'] ?? '';
 
     if (empty($client_id) || empty($client_secret) || empty($tenant_id)) {
-      throw new DataverseException('Missing Azure AD configuration');
+      throw DataverseException::configurationError('Missing Azure AD configuration');
     }
 
     return [
@@ -228,26 +230,26 @@ class AzureAdAuthService {
     try {
       $key = $this->keyRepository->getKey($key_id);
       if (!$key) {
-        throw new DataverseException("Key '{$key_id}' not found");
+        throw DataverseException::configurationError("Key '{$key_id}' not found");
       }
 
       $value = $key->getKeyValue();
       if (empty($value)) {
-        throw new DataverseException("Key '{$key_id}' has no value");
+        throw DataverseException::configurationError("Key '{$key_id}' has no value");
       }
 
       return $value;
     } catch (\Exception $e) {
-      throw new DataverseException("Failed to retrieve key '{$key_id}': " . $e->getMessage(), 0, $e);
+      throw DataverseException::configurationError("Failed to retrieve key '{$key_id}': " . $e->getMessage(), ['previous' => $e]);
     }
   }
 
-  protected function parseTokenResponse($response): array {
+  protected function parseTokenResponse(ResponseInterface $response): array {
     $content = $response->getBody()->getContents();
     $body = json_decode($content, true);
     
     if (json_last_error() !== JSON_ERROR_NONE) {
-      throw new DataverseException('Invalid JSON response from Azure AD');
+      throw DataverseException::authenticationError('Invalid JSON response from Azure AD');
     }
     
     return $body;
@@ -293,20 +295,21 @@ class AzureAdAuthService {
 
     foreach ($required_fields as $field) {
       if (empty($config[$field])) {
-        throw new DataverseException("Missing required Azure AD configuration: {$field}");
+        throw DataverseException::configurationError("Missing required Azure AD configuration: {$field}");
       }
     }
   }
 
   protected function validateTenantIdFormat(string $tenant_id): void {
     if (!preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $tenant_id)) {
-      throw new DataverseException('Azure Tenant ID must be a valid GUID format');
+      throw DataverseException::validationError('Azure Tenant ID must be a valid GUID format');
     }
   }
 
   protected function validateDataverseUrl(string $dataverse_url): void {
     if (!filter_var($dataverse_url, FILTER_VALIDATE_URL) || !str_starts_with($dataverse_url, 'https://')) {
-      throw new DataverseException('Dataverse URL must be a valid HTTPS URL');
+      throw DataverseException::validationError('Dataverse URL must be a valid HTTPS URL');
     }
   }
+
 }

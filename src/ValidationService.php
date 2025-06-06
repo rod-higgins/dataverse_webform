@@ -12,10 +12,16 @@ class ValidationService {
 
   public const ENTITY_NAME_PATTERN = '/^[a-zA-Z][a-zA-Z0-9_]*$/';
   public const FIELD_NAME_PATTERN = '/^[a-zA-Z][a-zA-Z0-9_.]*$/';
+  public const GUID_PATTERN = '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i';
   public const MAX_STRING_LENGTH = 4000;
+  public const MAX_IDENTIFIER_LENGTH = 100;
+  public const MAX_ENTITY_NAME_LENGTH = 64;
   public const RESERVED_FIELDS = [
     'ownerid', 'statecode', 'statuscode', 'createdby', 'createdon',
     'modifiedby', 'modifiedon', 'versionnumber',
+  ];
+  public const ALLOWED_TRANSFORMS = [
+    'none', 'string', 'number', 'boolean', 'date', 'email', 'phone', 'url', 'json'
   ];
 
   protected LoggerChannelFactoryInterface $loggerFactory;
@@ -26,7 +32,7 @@ class ValidationService {
 
   public function validateConfig(array $config): void {
     if (empty($config['enabled'])) {
-      throw new DataverseException('Dataverse integration is not enabled');
+      throw DataverseException::configurationError('Dataverse integration is not enabled');
     }
 
     $this->validateRequiredFields($config);
@@ -44,31 +50,31 @@ class ValidationService {
 
   public function validateEntityName(string $entity_name): void {
     if (empty($entity_name)) {
-      throw new DataverseException('Entity name cannot be empty');
+      throw DataverseException::validationError('Entity name cannot be empty');
     }
 
-    if (!preg_match(self::ENTITY_NAME_PATTERN, $entity_name) || strlen($entity_name) > 64) {
-      throw new DataverseException('Entity name contains invalid characters or exceeds 64 characters');
+    if (!preg_match(self::ENTITY_NAME_PATTERN, $entity_name) || strlen($entity_name) > self::MAX_ENTITY_NAME_LENGTH) {
+      throw DataverseException::validationError("Entity name '{$entity_name}' contains invalid characters or exceeds " . self::MAX_ENTITY_NAME_LENGTH . " characters");
     }
   }
 
   public function validateFieldName(string $field_name): void {
     if (empty($field_name)) {
-      throw new DataverseException('Field name cannot be empty');
+      throw DataverseException::validationError('Field name cannot be empty');
     }
 
-    if (!preg_match(self::FIELD_NAME_PATTERN, $field_name) || strlen($field_name) > 100) {
-      throw new DataverseException('Field name contains invalid characters or exceeds 100 characters');
+    if (!preg_match(self::FIELD_NAME_PATTERN, $field_name) || strlen($field_name) > self::MAX_IDENTIFIER_LENGTH) {
+      throw DataverseException::validationError("Field name '{$field_name}' contains invalid characters or exceeds " . self::MAX_IDENTIFIER_LENGTH . " characters");
     }
 
     if (in_array(strtolower($field_name), self::RESERVED_FIELDS)) {
-      throw new DataverseException("Field name '{$field_name}' is reserved by Dataverse");
+      throw DataverseException::validationError("Field name '{$field_name}' is reserved by Dataverse");
     }
   }
 
   public function validateEntityData(array $data): void {
     if (empty($data)) {
-      throw new DataverseException('Entity data cannot be empty');
+      throw DataverseException::validationError('Entity data cannot be empty');
     }
 
     foreach ($data as $field_name => $value) {
@@ -83,7 +89,7 @@ class ValidationService {
     $missing_fields = array_filter($required_fields, fn($field) => empty($config[$field]));
     
     if (!empty($missing_fields)) {
-      throw new DataverseException('Missing required configuration: ' . implode(', ', $missing_fields));
+      throw DataverseException::configurationError('Missing required configuration: ' . implode(', ', $missing_fields));
     }
   }
 
@@ -93,14 +99,14 @@ class ValidationService {
   }
 
   protected function validateAzureTenantId(string $tenant_id): void {
-    if (!preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $tenant_id)) {
-      throw new DataverseException('Azure Tenant ID must be a valid GUID format');
+    if (!preg_match(self::GUID_PATTERN, $tenant_id)) {
+      throw DataverseException::validationError('Azure Tenant ID must be a valid GUID format');
     }
   }
 
   protected function validateDataverseUrl(string $url): void {
     if (!filter_var($url, FILTER_VALIDATE_URL) || !str_starts_with($url, 'https://')) {
-      throw new DataverseException('Dataverse URL must be a valid HTTPS URL');
+      throw DataverseException::validationError('Dataverse URL must be a valid HTTPS URL');
     }
   }
 
@@ -120,7 +126,7 @@ class ValidationService {
 
   protected function validateNumericRange(string $field, int $value, int $min, int $max): void {
     if ($value < $min || $value > $max) {
-      throw new DataverseException("{$field} must be between {$min} and {$max}");
+      throw DataverseException::validationError("{$field} must be between {$min} and {$max}, got {$value}");
     }
   }
 
@@ -131,18 +137,18 @@ class ValidationService {
 
     $entities_used = [];
     
-    foreach ($field_mappings as $webform_field => $mapping) {
-      $this->validateSingleMapping($webform_field, $mapping);
+    foreach ($field_mappings as $index => $mapping) {
+      $this->validateSingleMapping($index, $mapping);
       $entities_used[] = $mapping['entity'];
     }
   }
 
-  protected function validateSingleMapping(string $webform_field, $mapping): void {
+  protected function validateSingleMapping(int $index, $mapping): void {
     if (!is_array($mapping)) {
-      throw new DataverseException("Invalid mapping configuration for field '{$webform_field}'");
+      throw DataverseException::validationError("Invalid mapping configuration at index {$index}");
     }
 
-    $this->validateMappingStructure($webform_field, $mapping);
+    $this->validateMappingStructure($index, $mapping);
     $this->validateEntityName($mapping['entity']);
     $this->validateFieldName($mapping['field']);
 
@@ -151,12 +157,12 @@ class ValidationService {
     }
   }
 
-  protected function validateMappingStructure(string $webform_field, array $mapping): void {
-    $required_fields = ['entity', 'field'];
+  protected function validateMappingStructure(int $index, array $mapping): void {
+    $required_fields = ['webform_field', 'entity', 'field'];
     $missing_fields = array_filter($required_fields, fn($field) => empty($mapping[$field]));
     
     if (!empty($missing_fields)) {
-      throw new DataverseException("Missing '" . implode(', ', $missing_fields) . "' in mapping for webform field '{$webform_field}'");
+      throw DataverseException::validationError("Missing required fields in mapping at index {$index}: " . implode(', ', $missing_fields));
     }
   }
 
@@ -171,7 +177,7 @@ class ValidationService {
       $this->validateEntityName($entity_name);
       
       if (!in_array($entity_name, $entities_in_mappings)) {
-        throw new DataverseException("Entity '{$entity_name}' in submission order is not present in field mappings");
+        throw DataverseException::validationError("Entity '{$entity_name}' in submission order is not present in field mappings");
       }
     }
 
@@ -214,19 +220,18 @@ class ValidationService {
 
   protected function validateStringValue(string $field_name, string $value): void {
     if (strlen($value) > self::MAX_STRING_LENGTH) {
-      throw new DataverseException("Value for field '{$field_name}' exceeds maximum length of " . self::MAX_STRING_LENGTH . " characters");
+      throw DataverseException::validationError("Value for field '{$field_name}' exceeds maximum length of " . self::MAX_STRING_LENGTH . " characters");
     }
 
     if (preg_match('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', $value)) {
-      throw new DataverseException("Value for field '{$field_name}' contains invalid control characters");
+      throw DataverseException::validationError("Value for field '{$field_name}' contains invalid control characters");
     }
   }
 
   protected function validateTransform(string $transform): void {
-    $allowed_transforms = ['none', 'string', 'number', 'boolean', 'date', 'email', 'phone', 'url', 'json'];
-
-    if (!in_array($transform, $allowed_transforms)) {
-      throw new DataverseException("Invalid transform type '{$transform}'. Allowed values: " . implode(', ', $allowed_transforms));
+    if (!in_array($transform, self::ALLOWED_TRANSFORMS)) {
+      throw DataverseException::validationError("Invalid transform type '{$transform}'. Allowed values: " . implode(', ', self::ALLOWED_TRANSFORMS));
     }
   }
+
 }
