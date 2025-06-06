@@ -1,0 +1,73 @@
+<?php
+
+/**
+ * @file
+ * Install, update and uninstall functions for the Dataverse Webform module.
+ */
+
+/**
+ * Implements hook_requirements().
+ */
+function dataverse_webform_requirements($phase) {
+  $requirements = [];
+
+  if ($phase == 'runtime') {
+    // Check if required modules are enabled
+    $module_handler = \Drupal::service('module_handler');
+    
+    if (!$module_handler->moduleExists('webform')) {
+      $requirements['dataverse_webform_webform'] = [
+        'title' => t('Dataverse Webform Integration'),
+        'value' => t('Webform module required'),
+        'description' => t('The Dataverse Webform Integration module requires the Webform module to be enabled.'),
+        'severity' => REQUIREMENT_ERROR,
+      ];
+    }
+    
+    if (!$module_handler->moduleExists('key')) {
+      $requirements['dataverse_webform_key'] = [
+        'title' => t('Dataverse Webform Integration'),
+        'value' => t('Key module required'),
+        'description' => t('The Dataverse Webform Integration module requires the Key module to be enabled for secure credential storage.'),
+        'severity' => REQUIREMENT_ERROR,
+      ];
+    }
+    
+    // Check if cURL is available
+    if (!function_exists('curl_init')) {
+      $requirements['dataverse_webform_curl'] = [
+        'title' => t('Dataverse Webform Integration'),
+        'value' => t('cURL not available'),
+        'description' => t('The Dataverse Webform Integration module requires cURL for HTTP communication.'),
+        'severity' => REQUIREMENT_ERROR,
+      ];
+    }
+    
+    // Check PHP version for Azure AD authentication
+    if (version_compare(PHP_VERSION, '7.4', '<')) {
+      $requirements['dataverse_webform_php'] = [
+        'title' => t('Dataverse Webform Integration'),
+        'value' => t('PHP version too old'),
+        'description' => t('The Dataverse Webform Integration module requires PHP 7.4 or higher for Azure AD authentication features.'),
+        'severity' => REQUIREMENT_WARNING,
+      ];
+    }
+  }
+
+  return $requirements;
+}
+
+/**
+ * Implements hook_uninstall().
+ */
+function dataverse_webform_uninstall() {
+  // Clean up any third-party settings
+  $webforms = \Drupal::entityTypeManager()->getStorage('webform')->loadMultiple();
+  
+  foreach ($webforms as $webform) {
+    if ($webform->getThirdPartySetting('dataverse_webform', 'dataverse_config')) {
+      $webform->unsetThirdPartySetting('dataverse_webform', 'dataverse_config');
+      $webform->save();
+    }
+  }
+}

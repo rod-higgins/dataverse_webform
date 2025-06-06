@@ -1,0 +1,266 @@
+<?php
+
+/**
+ * @file
+ * Main module file for Dataverse Webform Integration.
+ */
+
+use Drupal\Core\Form\FormStateInterface;
+use Drupal\webform\WebformSubmissionInterface;
+use Drupal\Core\Ajax\AjaxResponse;
+use Drupal\Core\Ajax\ReplaceCommand;
+
+/**
+ * Implements hook_webform_submission_insert().
+ */
+function dataverse_webform_webform_submission_insert(WebformSubmissionInterface $webform_submission) {
+  $webform = $webform_submission->getWebform();
+  
+  // Check if this webform has Dataverse integration enabled
+  $dataverse_config = $webform->getThirdPartySetting('dataverse_webform', 'dataverse_config');
+  
+  if (!empty($dataverse_config['enabled'])) {
+    $dataverse_service = \Drupal::service('dataverse_webform.dataverse_client');
+    $dataverse_service->submitToDataverse($webform_submission, $dataverse_config);
+  }
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter() for webform admin form.
+ */
+function dataverse_webform_form_webform_admin_form_alter(&$form, FormStateInterface $form_state, $form_id) {
+  /** @var \Drupal\webform\WebformInterface $webform */
+  $webform = $form_state->getFormObject()->getEntity();
+  
+  $form['third_party_settings']['dataverse_webform'] = [
+    '#type' => 'details',
+    '#title' => t('Dataverse Integration'),
+    '#open' => TRUE,
+    '#tree' => TRUE,
+  ];
+  
+  $dataverse_config = $webform->getThirdPartySetting('dataverse_webform', 'dataverse_config', []);
+  
+  $form['third_party_settings']['dataverse_webform']['enabled'] = [
+    '#type' => 'checkbox',
+    '#title' => t('Enable Dataverse integration'),
+    '#default_value' => $dataverse_config['enabled'] ?? FALSE,
+  ];
+  
+  // Azure AD Configuration
+  $form['third_party_settings']['dataverse_webform']['azure_config'] = [
+    '#type' => 'details',
+    '#title' => t('Azure AD Configuration'),
+    '#open' => TRUE,
+    '#states' => [
+      'visible' => [
+        ':input[name="third_party_settings[dataverse_webform][enabled]"]' => ['checked' => TRUE],
+      ],
+    ],
+  ];
+  
+  // Get available keys for Azure AD credentials
+  $key_options = [];
+  $key_repository = \Drupal::service('key.repository');
+  $keys = $key_repository->getKeys();
+  foreach ($keys as $key_id => $key) {
+    $key_options[$key_id] = $key->label();
+  }
+  
+  $form['third_party_settings']['dataverse_webform']['azure_tenant_id'] = [
+    '#type' => 'textfield',
+    '#title' => t('Azure Tenant ID'),
+    '#description' => t('Your Azure AD tenant ID (GUID)'),
+    '#default_value' => $dataverse_config['azure_tenant_id'] ?? '',
+    '#required' => FALSE,
+  ];
+  
+  $form['third_party_settings']['dataverse_webform']['azure_client_id_key'] = [
+    '#type' => 'select',
+    '#title' => t('Azure Client ID Key'),
+    '#description' => t('Select the key containing your Azure AD application client ID'),
+    '#options' => ['' => t('- Select a key -')] + $key_options,
+    '#default_value' => $dataverse_config['azure_client_id_key'] ?? '',
+    '#required' => FALSE,
+  ];
+  
+  $form['third_party_settings']['dataverse_webform']['azure_client_secret_key'] = [
+    '#type' => 'select',
+    '#title' => t('Azure Client Secret Key'),
+    '#description' => t('Select the key containing your Azure AD application client secret'),
+    '#options' => ['' => t('- Select a key -')] + $key_options,
+    '#default_value' => $dataverse_config['azure_client_secret_key'] ?? '',
+    '#required' => FALSE,
+  ];
+  
+  // Dataverse Configuration
+  $form['third_party_settings']['dataverse_webform']['dataverse_config'] = [
+    '#type' => 'details',
+    '#title' => t('Dataverse Configuration'),
+    '#open' => TRUE,
+    '#states' => [
+      'visible' => [
+        ':input[name="third_party_settings[dataverse_webform][enabled]"]' => ['checked' => TRUE],
+      ],
+    ],
+  ];
+  
+  $form['third_party_settings']['dataverse_webform']['dataverse_url'] = [
+    '#type' => 'url',
+    '#title' => t('Dataverse URL'),
+    '#description' => t('The base URL of your Dataverse instance (e.g., https://yourorg.crm.dynamics.com)'),
+    '#default_value' => $dataverse_config['dataverse_url'] ?? '',
+    '#required' => FALSE,
+  ];
+  
+  // Entity selection
+  $form['third_party_settings']['dataverse_webform']['target_entity'] = [
+    '#type' => 'select',
+    '#title' => t('Target Entity'),
+    '#description' => t('Select the Dataverse entity to create records in'),
+    '#options' => ['' => t('- Select an entity -')],
+    '#default_value' => $dataverse_config['target_entity'] ?? '',
+    '#ajax' => [
+      'callback' => 'dataverse_webform_entity_fields_ajax_callback',
+      'wrapper' => 'field-mapping-wrapper',
+      'method' => 'replace',
+    ],
+    '#required' => FALSE,
+  ];
+  
+  // Load entities if we have configuration
+  if (!empty($dataverse_config['dataverse_url']) && 
+      !empty($dataverse_config['azure_tenant_id']) && 
+      !empty($dataverse_config['azure_client_id_key'])) {
+    
+    $dataverse_service = \Drupal::service('dataverse_webform.dataverse_client');
+    $entities = $dataverse_service->getEntities($dataverse_config);
+    
+    $entity_options = ['' => t('- Select an entity -')];
+    foreach ($entities as $entity) {
+      $entity_options[$entity['logical_name']] = $entity['display_name'] . ' (' . $entity['logical_name'] . ')';
+    }
+    $form['third_party_settings']['dataverse_webform']['target_entity']['#options'] = $entity_options;
+  }
+  
+  // Field mapping section
+  $form['third_party_settings']['dataverse_webform']['field_mapping_wrapper'] = [
+    '#type' => 'container',
+    '#attributes' => ['id' => 'field-mapping-wrapper'],
+    '#states' => [
+      'visible' => [
+        ':input[name="third_party_settings[dataverse_webform][enabled]"]' => ['checked' => TRUE],
+      ],
+    ],
+  ];
+  
+  $form['third_party_settings']['dataverse_webform']['field_mapping_wrapper']['field_mapping'] = [
+    '#type' => 'details',
+    '#title' => t('Field Mapping'),
+    '#open' => TRUE,
+  ];
+  
+  // Get webform elements for mapping
+  $webform_elements = $webform->getElementsInitializedAndFlattened();
+  $field_mapping = $dataverse_config['field_mapping'] ?? [];
+  $selected_entity = $dataverse_config['target_entity'] ?? '';
+  
+  // Load entity fields if an entity is selected
+  $entity_fields = [];
+  if (!empty($selected_entity) && !empty($dataverse_config['dataverse_url'])) {
+    $dataverse_service = \Drupal::service('dataverse_webform.dataverse_client');
+    $entity_fields = $dataverse_service->getEntityFields($dataverse_config, $selected_entity);
+  }
+  
+  $field_options = ['' => t('- Select a field -')];
+  foreach ($entity_fields as $field) {
+    $field_options[$field['logical_name']] = $field['display_name'] . ' (' . $field['logical_name'] . ')';
+  }
+  
+  foreach ($webform_elements as $element_key => $element) {
+    if (isset($element['#type']) && !in_array($element['#type'], ['markup', 'processed_text', 'webform_actions'])) {
+      $form['third_party_settings']['dataverse_webform']['field_mapping_wrapper']['field_mapping'][$element_key] = [
+        '#type' => 'select',
+        '#title' => t('Dataverse field for "@element"', ['@element' => $element['#title'] ?? $element_key]),
+        '#description' => t('Select the Dataverse field to map this webform element to'),
+        '#options' => $field_options,
+        '#default_value' => $field_mapping[$element_key] ?? '',
+      ];
+    }
+  }
+  
+  if (empty($entity_fields)) {
+    $form['third_party_settings']['dataverse_webform']['field_mapping_wrapper']['field_mapping']['info'] = [
+      '#markup' => '<p>' . t('Select a target entity above to see available fields for mapping.') . '</p>',
+    ];
+  }
+  
+  // Add custom submit handler
+  $form['actions']['submit']['#submit'][] = 'dataverse_webform_admin_form_submit';
+  
+  // Add validation
+  $form['#validate'][] = 'dataverse_webform_admin_form_validate';
+}
+
+/**
+ * Ajax callback for entity field loading.
+ */
+function dataverse_webform_entity_fields_ajax_callback($form, FormStateInterface $form_state) {
+  return $form['third_party_settings']['dataverse_webform']['field_mapping_wrapper'];
+}
+
+/**
+ * Validation handler for webform admin form.
+ */
+function dataverse_webform_admin_form_validate($form, FormStateInterface $form_state) {
+  $dataverse_settings = $form_state->getValue(['third_party_settings', 'dataverse_webform']);
+  
+  if (!empty($dataverse_settings['enabled'])) {
+    // Validate required fields
+    $required_fields = [
+      'dataverse_url' => t('Dataverse URL is required when integration is enabled.'),
+      'azure_tenant_id' => t('Azure Tenant ID is required when integration is enabled.'),
+      'azure_client_id_key' => t('Azure Client ID Key is required when integration is enabled.'),
+      'azure_client_secret_key' => t('Azure Client Secret Key is required when integration is enabled.'),
+      'target_entity' => t('Target Entity is required when integration is enabled.'),
+    ];
+    
+    foreach ($required_fields as $field => $message) {
+      if (empty($dataverse_settings[$field])) {
+        $form_state->setErrorByName("third_party_settings][dataverse_webform][$field", $message);
+      }
+    }
+    
+    // Validate URL format
+    if (!empty($dataverse_settings['dataverse_url'])) {
+      if (!filter_var($dataverse_settings['dataverse_url'], FILTER_VALIDATE_URL)) {
+        $form_state->setErrorByName('third_party_settings][dataverse_webform][dataverse_url', t('Please enter a valid URL.'));
+      }
+    }
+    
+    // Test connection if all required fields are present
+    if (!$form_state->getErrors()) {
+      $dataverse_service = \Drupal::service('dataverse_webform.dataverse_client');
+      if (!$dataverse_service->testConnection($dataverse_settings)) {
+        $form_state->setErrorByName('third_party_settings][dataverse_webform][dataverse_url', t('Failed to connect to Dataverse. Please check your configuration.'));
+      }
+    }
+  }
+}
+
+/**
+ * Custom submit handler for webform admin form.
+ */
+function dataverse_webform_admin_form_submit($form, FormStateInterface $form_state) {
+  /** @var \Drupal\webform\WebformInterface $webform */
+  $webform = $form_state->getFormObject()->getEntity();
+  $dataverse_settings = $form_state->getValue(['third_party_settings', 'dataverse_webform']);
+  
+  // Save the configuration
+  $webform->setThirdPartySetting('dataverse_webform', 'dataverse_config', $dataverse_settings);
+  $webform->save();
+  
+  if (!empty($dataverse_settings['enabled'])) {
+    \Drupal::messenger()->addStatus(t('Dataverse integration has been configured successfully.'));
+  }
+}

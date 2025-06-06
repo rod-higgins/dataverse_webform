@@ -1,0 +1,10 @@
+name: 'Dataverse Webform Integration'
+type: module
+description: 'Integrates Webform submissions with Dataverse via OData API'
+core_version_requirement: ^10.4 || ^11
+package: 'Custom'
+dependencies:
+  - webform:webform
+  - field:field
+  - system:system
+  - key:key

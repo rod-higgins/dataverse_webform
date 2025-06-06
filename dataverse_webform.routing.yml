@@ -1,0 +1,14 @@
+dataverse_webform.test:
+  path: '/admin/config/services/dataverse/test'
+  defaults:
+    _form: '\Drupal\dataverse_webform\Form\DataverseTestForm'
+    _title: 'Test Dataverse Connection'
+  requirements:
+    _permission: 'administer dataverse webform'
+
+dataverse_webform.entity_fields_ajax:
+  path: '/admin/dataverse/ajax/entity-fields'
+  defaults:
+    _controller: '\Drupal\dataverse_webform\Controller\DataverseAjaxController::getEntityFields'
+  requirements:
+    _permission: 'administer dataverse webform'

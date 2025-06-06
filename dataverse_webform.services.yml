@@ -1,0 +1,8 @@
+services:
+  dataverse_webform.azure_auth:
+    class: Drupal\dataverse_webform\AzureAdAuthService
+    arguments: ['@http_client_factory', '@logger.factory', '@state', '@key.repository']
+  
+  dataverse_webform.dataverse_client:
+    class: Drupal\dataverse_webform\DataverseClient
+    arguments: ['@http_client_factory', '@logger.factory', '@dataverse_webform.azure_auth', '@cache.default']
