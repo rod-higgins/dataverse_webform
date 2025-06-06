@@ -86,10 +86,8 @@ class ConfigurationManager {
   public function convertLegacyConfiguration(array $old_config): array {
     $new_config = $this->getDefaultConfiguration();
 
-    // Copy basic settings
     $this->copyBasicSettings($old_config, $new_config);
     
-    // Convert field mappings if present
     if ($this->hasLegacyFieldMappings($old_config)) {
       $this->convertLegacyFieldMappings($old_config, $new_config);
     }
@@ -137,6 +135,31 @@ class ConfigurationManager {
     $this->addConfigurationWarnings($config, $results);
 
     return $results;
+  }
+
+  public function extractCredentialsFromConfig(array $config): array {
+    $client_id = $this->getKeyValue($config['azure_client_id_key'] ?? '');
+    $client_secret = $this->getKeyValue($config['azure_client_secret_key'] ?? '');
+    
+    return [
+      'tenant_id' => $config['azure_tenant_id'] ?? '',
+      'client_id' => $client_id,
+      'client_secret' => $client_secret,
+    ];
+  }
+
+  public function sanitizeConfigForLogging(array $config): array {
+    $safe_config = $config;
+    
+    // Remove sensitive keys but keep the key names for debugging
+    $sensitive_fields = ['azure_client_id_key', 'azure_client_secret_key'];
+    foreach ($sensitive_fields as $field) {
+      if (isset($safe_config[$field])) {
+        $safe_config[$field] = '[REDACTED: ' . substr($safe_config[$field], 0, 8) . '...]';
+      }
+    }
+    
+    return $safe_config;
   }
 
   protected function copyBasicSettings(array $old_config, array &$new_config): void {
@@ -225,6 +248,30 @@ class ConfigurationManager {
         $results['warnings'][] = 'No submission order specified. Entities will be processed in random order.';
       } elseif (count($entities) !== count($config['submission_order'])) {
         $results['warnings'][] = 'Submission order does not include all entities from field mappings.';
+      }
+      
+      // Check for potential circular dependencies
+      if (count($entities) > 1) {
+        $this->checkForCircularDependencies($config['field_mappings'], $results);
+      }
+    }
+  }
+
+  protected function checkForCircularDependencies(array $field_mappings, array &$results): void {
+    $relationships = [];
+    
+    foreach ($field_mappings as $mapping) {
+      if (!empty($mapping['relationship_to'])) {
+        $relationships[$mapping['entity']][] = $mapping['relationship_to'];
+      }
+    }
+    
+    // Simple circular dependency check - could be enhanced for more complex scenarios
+    foreach ($relationships as $entity => $deps) {
+      foreach ($deps as $dep) {
+        if (isset($relationships[$dep]) && in_array($entity, $relationships[$dep])) {
+          $results['warnings'][] = "Potential circular dependency detected between {$entity} and {$dep}";
+        }
       }
     }
   }

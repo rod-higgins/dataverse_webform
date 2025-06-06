@@ -72,7 +72,7 @@ class DataverseClient implements DataverseClientInterface {
 
   public function testConnection(array $config): bool {
     $cached_result = $this->cacheManager->getCachedTokenValidation($config);
-    if ($cached_result !== NULL) {
+    if ($cached_result !== null) {
       return $cached_result;
     }
 
@@ -106,7 +106,7 @@ class DataverseClient implements DataverseClientInterface {
 
   public function getEntities(array $config): array {
     $cached_entities = $this->cacheManager->getCachedEntities($config);
-    if ($cached_entities !== NULL) {
+    if ($cached_entities !== null) {
       return $cached_entities;
     }
 
@@ -117,11 +117,9 @@ class DataverseClient implements DataverseClientInterface {
     $query_builder = $this->createEntitiesQuery();
 
     try {
-      $response = $this->createHttpClient($config)->get($query_builder->build(), [
-        'headers' => $this->buildHeaders($access_token),
-      ]);
-
+      $response = $this->executeRequest($config, $query_builder->build(), $access_token);
       $entities = $this->parseEntitiesResponse($response);
+      
       $this->cacheManager->setCachedEntities($config, $entities, DataverseCacheManager::LONG_TTL);
       $this->recordApiCall();
       
@@ -135,7 +133,7 @@ class DataverseClient implements DataverseClientInterface {
     $this->validator->validateEntityName($entity_name);
     
     $cached_fields = $this->cacheManager->getCachedEntityFields($config, $entity_name);
-    if ($cached_fields !== NULL) {
+    if ($cached_fields !== null) {
       return $cached_fields;
     }
 
@@ -146,11 +144,9 @@ class DataverseClient implements DataverseClientInterface {
     $query_builder = $this->createEntityFieldsQuery($entity_name);
 
     try {
-      $response = $this->createHttpClient($config)->get($query_builder->build(), [
-        'headers' => $this->buildHeaders($access_token),
-      ]);
-
+      $response = $this->executeRequest($config, $query_builder->build(), $access_token);
       $fields = $this->parseFieldsResponse($response);
+      
       $this->cacheManager->setCachedEntityFields($config, $entity_name, $fields);
       $this->recordApiCall();
       
@@ -175,11 +171,9 @@ class DataverseClient implements DataverseClientInterface {
         'timeout' => $config['timeout'] ?? self::DEFAULT_TIMEOUT,
       ]);
 
-      if ($response->getStatusCode() < 200 || $response->getStatusCode() >= 300) {
-        throw new DataverseException('Entity creation failed: HTTP ' . $response->getStatusCode());
-      }
-
+      $this->validateResponseStatus($response, 'Entity creation failed');
       $this->recordApiCall();
+      
       return $this->parseEntityCreationResponse($response);
     } catch (RequestException $e) {
       throw new DataverseException('Entity creation request failed: ' . $e->getMessage(), 0, $e);
@@ -192,12 +186,7 @@ class DataverseClient implements DataverseClientInterface {
 
     foreach (array_chunk($entities_data, $batch_size, true) as $batch) {
       foreach ($batch as $entity_name => $entity_data) {
-        try {
-          $result = $this->createEntity($config, $entity_name, $entity_data);
-          $results[$entity_name] = ['success' => true, 'data' => $result];
-        } catch (DataverseException $e) {
-          $results[$entity_name] = ['success' => false, 'error' => $e->getMessage()];
-        }
+        $results[$entity_name] = $this->createSingleEntityWithErrorHandling($config, $entity_name, $entity_data);
       }
       
       if (count($entities_data) > $batch_size) {
@@ -213,26 +202,7 @@ class DataverseClient implements DataverseClientInterface {
     $entities = $this->getEntities($config);
     
     foreach ($field_mappings as $mapping) {
-      $entity_name = $mapping['entity'] ?? '';
-      $field_name = $mapping['field'] ?? '';
-      
-      $result = [
-        'entity_exists' => isset($entities[$entity_name]),
-        'field_exists' => false,
-        'field_valid' => false,
-      ];
-
-      if ($result['entity_exists']) {
-        try {
-          $fields = $this->getEntityFields($config, $entity_name);
-          $result['field_exists'] = isset($fields[$field_name]);
-          $result['field_valid'] = $result['field_exists'];
-        } catch (DataverseException $e) {
-          $result['error'] = $e->getMessage();
-        }
-      }
-
-      $validation_results[] = $result;
+      $validation_results[] = $this->validateSingleMapping($config, $mapping, $entities);
     }
 
     return $validation_results;
@@ -275,19 +245,50 @@ class DataverseClient implements DataverseClientInterface {
         continue;
       }
 
-      try {
-        $result = $this->createEntity($config, $entity_name, $entities_data[$entity_name]);
-        $results[$entity_name] = ['success' => true, 'id' => $result['id'] ?? null, 'data' => $result];
-      } catch (DataverseException $e) {
-        $results[$entity_name] = ['success' => false, 'error' => $e->getMessage()];
-        
-        if ($config['stop_on_error'] ?? true) {
-          break;
-        }
+      $results[$entity_name] = $this->createSingleEntityWithErrorHandling(
+        $config, 
+        $entity_name, 
+        $entities_data[$entity_name]
+      );
+      
+      if (!$results[$entity_name]['success'] && ($config['stop_on_error'] ?? true)) {
+        break;
       }
     }
 
     return $results;
+  }
+
+  protected function createSingleEntityWithErrorHandling(array $config, string $entity_name, array $entity_data): array {
+    try {
+      $result = $this->createEntity($config, $entity_name, $entity_data);
+      return ['success' => true, 'id' => $result['id'] ?? null, 'data' => $result];
+    } catch (DataverseException $e) {
+      return ['success' => false, 'error' => $e->getMessage()];
+    }
+  }
+
+  protected function validateSingleMapping(array $config, array $mapping, array $entities): array {
+    $entity_name = $mapping['entity'] ?? '';
+    $field_name = $mapping['field'] ?? '';
+    
+    $result = [
+      'entity_exists' => isset($entities[$entity_name]),
+      'field_exists' => false,
+      'field_valid' => false,
+    ];
+
+    if ($result['entity_exists']) {
+      try {
+        $fields = $this->getEntityFields($config, $entity_name);
+        $result['field_exists'] = isset($fields[$field_name]);
+        $result['field_valid'] = $result['field_exists'];
+      } catch (DataverseException $e) {
+        $result['error'] = $e->getMessage();
+      }
+    }
+
+    return $result;
   }
 
   protected function getValidAccessToken(array $config): string {
@@ -298,9 +299,20 @@ class DataverseClient implements DataverseClientInterface {
     return $access_token;
   }
 
+  protected function executeRequest(array $config, string $endpoint, string $access_token) {
+    return $this->createHttpClient($config)->get($endpoint, [
+      'headers' => $this->buildHeaders($access_token),
+    ]);
+  }
+
+  protected function validateResponseStatus($response, string $error_context): void {
+    if ($response->getStatusCode() < 200 || $response->getStatusCode() >= 300) {
+      throw new DataverseException($error_context . ': HTTP ' . $response->getStatusCode());
+    }
+  }
+
   protected function createEntitiesQuery(): ODataQueryBuilder {
-    $query_builder = new ODataQueryBuilder('EntityDefinitions');
-    return $query_builder
+    return (new ODataQueryBuilder('EntityDefinitions'))
       ->select(['LogicalName', 'DisplayName', 'SchemaName', 'EntitySetName', 'Description'])
       ->filter('IsCustomizable/Value', 'eq', true)
       ->filter('IsValidForAdvancedFind/Value', 'eq', true)
@@ -308,65 +320,64 @@ class DataverseClient implements DataverseClientInterface {
   }
 
   protected function createEntityFieldsQuery(string $entity_name): ODataQueryBuilder {
-    $query_builder = new ODataQueryBuilder('EntityDefinitions');
-    return $query_builder
+    return (new ODataQueryBuilder('EntityDefinitions'))
       ->filter('LogicalName', 'eq', $entity_name)
       ->expand(['Attributes'])
       ->select(['LogicalName', 'Attributes']);
   }
 
   protected function parseEntitiesResponse($response): array {
-    if ($response->getStatusCode() !== 200) {
-      throw new DataverseException('Failed to retrieve entities: HTTP ' . $response->getStatusCode());
-    }
-
+    $this->validateResponseStatus($response, 'Failed to retrieve entities');
     $data = $this->parseJsonResponse($response);
     $entities = [];
     
     if (isset($data['value'])) {
       foreach ($data['value'] as $entity) {
-        $display_name = $entity['DisplayName']['UserLocalizedLabel']['Label'] ?? $entity['LogicalName'];
-        $entities[$entity['LogicalName']] = [
-          'logical_name' => $entity['LogicalName'],
-          'display_name' => $display_name,
-          'schema_name' => $entity['SchemaName'] ?? '',
-          'entity_set_name' => $entity['EntitySetName'] ?? '',
-          'description' => $entity['Description']['UserLocalizedLabel']['Label'] ?? '',
-        ];
+        $entities[$entity['LogicalName']] = $this->buildEntityData($entity);
       }
     }
 
     return $entities;
   }
 
-  protected function parseFieldsResponse($response): array {
-    if ($response->getStatusCode() !== 200) {
-      throw new DataverseException('Failed to retrieve entity fields: HTTP ' . $response->getStatusCode());
-    }
+  protected function buildEntityData(array $entity): array {
+    return [
+      'logical_name' => $entity['LogicalName'],
+      'display_name' => $entity['DisplayName']['UserLocalizedLabel']['Label'] ?? $entity['LogicalName'],
+      'schema_name' => $entity['SchemaName'] ?? '',
+      'entity_set_name' => $entity['EntitySetName'] ?? '',
+      'description' => $entity['Description']['UserLocalizedLabel']['Label'] ?? '',
+    ];
+  }
 
+  protected function parseFieldsResponse($response): array {
+    $this->validateResponseStatus($response, 'Failed to retrieve entity fields');
     $data = $this->parseJsonResponse($response);
     $fields = [];
     
     if (isset($data['value'][0]['Attributes'])) {
       foreach ($data['value'][0]['Attributes'] as $attribute) {
         if ($this->isValidFieldAttribute($attribute)) {
-          $display_name = $attribute['DisplayName']['UserLocalizedLabel']['Label'] ?? $attribute['LogicalName'];
-          $fields[$attribute['LogicalName']] = [
-            'logical_name' => $attribute['LogicalName'],
-            'display_name' => $display_name,
-            'attribute_type' => $attribute['AttributeType'] ?? '',
-            'description' => $attribute['Description']['UserLocalizedLabel']['Label'] ?? '',
-            'is_required' => $attribute['RequiredLevel']['Value'] ?? 'None',
-            'max_length' => $attribute['MaxLength'] ?? null,
-            'is_primary_id' => $attribute['IsPrimaryId']['Value'] ?? false,
-            'is_primary_name' => $attribute['IsPrimaryName']['Value'] ?? false,
-          ];
+          $fields[$attribute['LogicalName']] = $this->buildFieldData($attribute);
         }
       }
     }
 
     uasort($fields, fn($a, $b) => strcmp($a['display_name'], $b['display_name']));
     return $fields;
+  }
+
+  protected function buildFieldData(array $attribute): array {
+    return [
+      'logical_name' => $attribute['LogicalName'],
+      'display_name' => $attribute['DisplayName']['UserLocalizedLabel']['Label'] ?? $attribute['LogicalName'],
+      'attribute_type' => $attribute['AttributeType'] ?? '',
+      'description' => $attribute['Description']['UserLocalizedLabel']['Label'] ?? '',
+      'is_required' => $attribute['RequiredLevel']['Value'] ?? 'None',
+      'max_length' => $attribute['MaxLength'] ?? null,
+      'is_primary_id' => $attribute['IsPrimaryId']['Value'] ?? false,
+      'is_primary_name' => $attribute['IsPrimaryName']['Value'] ?? false,
+    ];
   }
 
   protected function parseJsonResponse($response): array {

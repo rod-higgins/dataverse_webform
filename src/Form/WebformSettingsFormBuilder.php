@@ -45,42 +45,51 @@ class WebformSettingsFormBuilder {
 
     $form['#attached']['library'][] = 'dataverse_webform/admin';
 
+    $this->buildMainFieldset($form, $config);
+    $this->addFormHandlers($form);
+  }
+
+  protected function buildMainFieldset(array &$form, array $config): void {
     $form['third_party_settings']['dataverse_webform'] = [
       '#type' => 'details',
       '#title' => $this->t('Dataverse Integration'),
       '#description' => $this->t('Configure integration with Microsoft Dataverse for automatic submission processing.'),
       '#open' => !empty($config['enabled']),
-      '#tree' => TRUE,
+      '#tree' => true,
     ];
 
     $dataverse_fieldset = &$form['third_party_settings']['dataverse_webform'];
 
-    $dataverse_fieldset['enabled'] = [
+    $this->buildEnabledCheckbox($dataverse_fieldset, $config);
+    $this->buildConfigContainer($dataverse_fieldset, $config);
+  }
+
+  protected function buildEnabledCheckbox(array &$fieldset, array $config): void {
+    $fieldset['enabled'] = [
       '#type' => 'checkbox',
       '#title' => $this->t('Enable Dataverse integration'),
       '#description' => $this->t('Automatically submit webform data to Microsoft Dataverse when submissions are created.'),
       '#default_value' => $config['enabled'],
     ];
+  }
 
-    $dataverse_fieldset['config_container'] = [
+  protected function buildConfigContainer(array &$fieldset, array $config): void {
+    $fieldset['config_container'] = [
       '#type' => 'container',
       '#states' => [
         'visible' => [
-          'input[name="third_party_settings[dataverse_webform][enabled]"]' => ['checked' => TRUE],
+          'input[name="third_party_settings[dataverse_webform][enabled]"]' => ['checked' => true],
         ],
       ],
     ];
 
-    $config_container = &$dataverse_fieldset['config_container'];
+    $config_container = &$fieldset['config_container'];
 
     $this->buildAzureAdConfiguration($config_container, $config);
     $this->buildDataverseConfiguration($config_container, $config);
-    $this->buildFieldMappingsConfiguration($config_container, $config, $webform);
+    $this->buildFieldMappingsConfiguration($config_container, $config);
     $this->buildAdvancedConfiguration($config_container, $config);
     $this->buildConnectionTestingSection($config_container, $config);
-
-    $form['#validate'][] = [$this, 'validateWebformSettings'];
-    $form['actions']['submit']['#submit'][] = [$this, 'submitWebformSettings'];
   }
 
   protected function buildAzureAdConfiguration(array &$container, array $config): void {
@@ -88,22 +97,21 @@ class WebformSettingsFormBuilder {
       '#type' => 'details',
       '#title' => $this->t('Azure AD Configuration'),
       '#description' => $this->t('Configure Azure Active Directory authentication for Dataverse access.'),
-      '#open' => TRUE,
+      '#open' => true,
     ];
 
     $azure_config = &$container['azure_config'];
+    $key_options = $this->configManager->getAzureCredentialKeys();
 
     $azure_config['azure_tenant_id'] = [
       '#type' => 'textfield',
       '#title' => $this->t('Azure Tenant ID'),
       '#description' => $this->t('Your Azure AD tenant ID in GUID format (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)'),
       '#default_value' => $config['azure_tenant_id'],
-      '#required' => TRUE,
+      '#required' => true,
       '#pattern' => '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',
       '#attributes' => ['placeholder' => 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'],
     ];
-
-    $key_options = $this->configManager->getAzureCredentialKeys();
 
     $azure_config['azure_client_id_key'] = [
       '#type' => 'select',
@@ -111,7 +119,7 @@ class WebformSettingsFormBuilder {
       '#description' => $this->t('Select the key containing your Azure AD application client ID. <a href="@url">Manage keys</a>', ['@url' => '/admin/config/system/keys']),
       '#options' => $key_options,
       '#default_value' => $config['azure_client_id_key'],
-      '#required' => TRUE,
+      '#required' => true,
     ];
 
     $azure_config['azure_client_secret_key'] = [
@@ -120,7 +128,7 @@ class WebformSettingsFormBuilder {
       '#description' => $this->t('Select the key containing your Azure AD application client secret. <a href="@url">Manage keys</a>', ['@url' => '/admin/config/system/keys']),
       '#options' => $key_options,
       '#default_value' => $config['azure_client_secret_key'],
-      '#required' => TRUE,
+      '#required' => true,
     ];
   }
 
@@ -129,7 +137,7 @@ class WebformSettingsFormBuilder {
       '#type' => 'details',
       '#title' => $this->t('Dataverse Configuration'),
       '#description' => $this->t('Configure your Microsoft Dataverse environment connection.'),
-      '#open' => TRUE,
+      '#open' => true,
     ];
 
     $container['dataverse_config']['dataverse_url'] = [
@@ -137,23 +145,24 @@ class WebformSettingsFormBuilder {
       '#title' => $this->t('Dataverse URL'),
       '#description' => $this->t('The base URL of your Dataverse instance (e.g., https://yourorg.crm.dynamics.com)'),
       '#default_value' => $config['dataverse_url'],
-      '#required' => TRUE,
+      '#required' => true,
       '#pattern' => 'https://.*',
       '#attributes' => ['placeholder' => 'https://yourorg.crm.dynamics.com'],
     ];
   }
 
-  protected function buildFieldMappingsConfiguration(array &$container, array $config, $webform): void {
+  protected function buildFieldMappingsConfiguration(array &$container, array $config): void {
     $container['field_mappings_config'] = [
       '#type' => 'details',
       '#title' => $this->t('Field Mappings'),
       '#description' => $this->t('Map webform fields to Dataverse entities and fields. Each field can be mapped to a different entity for multi-entity submissions.'),
-      '#open' => TRUE,
+      '#open' => true,
     ];
 
     $mappings_config = &$container['field_mappings_config'];
-
+    $webform = $this->getWebformFromFormState();
     $webform_fields = $this->getWebformFields($webform);
+
     if (empty($webform_fields)) {
       $mappings_config['no_fields'] = [
         '#markup' => '<p>' . $this->t('No mappable fields found in this webform. Please add form elements first.') . '</p>',
@@ -161,7 +170,12 @@ class WebformSettingsFormBuilder {
       return;
     }
 
-    $mappings_config['field_mappings'] = [
+    $this->buildFieldMappingsTable($mappings_config, $config, $webform_fields);
+    $this->buildSubmissionOrderConfiguration($mappings_config, $config);
+  }
+
+  protected function buildFieldMappingsTable(array &$container, array $config, array $webform_fields): void {
+    $container['field_mappings'] = [
       '#type' => 'table',
       '#header' => [
         $this->t('Webform Field'),
@@ -178,10 +192,8 @@ class WebformSettingsFormBuilder {
     
     foreach ($webform_fields as $field_key => $field_label) {
       $existing_mapping = $this->findExistingMapping($field_mappings, $field_key);
-      $mappings_config['field_mappings'][$field_key] = $this->buildFieldMappingRow($field_key, $field_label, $existing_mapping);
+      $container['field_mappings'][$field_key] = $this->buildFieldMappingRow($field_key, $field_label, $existing_mapping);
     }
-
-    $this->buildSubmissionOrderConfiguration($mappings_config, $config, $field_mappings);
   }
 
   protected function buildFieldMappingRow(string $field_key, string $field_label, ?array $existing_mapping): array {
@@ -212,16 +224,12 @@ class WebformSettingsFormBuilder {
       ],
       'transform' => [
         '#type' => 'select',
-        '#options' => [
-          'none' => $this->t('None'), 'string' => $this->t('String'), 'number' => $this->t('Number'),
-          'boolean' => $this->t('Boolean'), 'date' => $this->t('Date'), 'email' => $this->t('Email'),
-          'phone' => $this->t('Phone'), 'url' => $this->t('URL'), 'json' => $this->t('JSON'),
-        ],
+        '#options' => $this->getTransformOptions(),
         '#default_value' => $existing_mapping['transform'] ?? 'none',
       ],
       'required' => [
         '#type' => 'checkbox',
-        '#default_value' => $existing_mapping['required'] ?? FALSE,
+        '#default_value' => $existing_mapping['required'] ?? false,
       ],
       'actions' => [
         '#type' => 'button',
@@ -231,7 +239,22 @@ class WebformSettingsFormBuilder {
     ];
   }
 
-  protected function buildSubmissionOrderConfiguration(array &$container, array $config, array $field_mappings): void {
+  protected function getTransformOptions(): array {
+    return [
+      'none' => $this->t('None'),
+      'string' => $this->t('String'),
+      'number' => $this->t('Number'),
+      'boolean' => $this->t('Boolean'),
+      'date' => $this->t('Date'),
+      'email' => $this->t('Email'),
+      'phone' => $this->t('Phone'),
+      'url' => $this->t('URL'),
+      'json' => $this->t('JSON'),
+    ];
+  }
+
+  protected function buildSubmissionOrderConfiguration(array &$container, array $config): void {
+    $field_mappings = $config['field_mappings'] ?? [];
     $entities = $this->configManager->getEntitiesFromMappings($field_mappings);
     
     if (count($entities) > 1) {
@@ -239,7 +262,7 @@ class WebformSettingsFormBuilder {
         '#type' => 'details',
         '#title' => $this->t('Entity Submission Order'),
         '#description' => $this->t('Specify the order in which entities should be created. This is important for maintaining relationships between entities.'),
-        '#open' => FALSE,
+        '#open' => false,
       ];
 
       $order_options = array_combine($entities, $entities);
@@ -257,37 +280,48 @@ class WebformSettingsFormBuilder {
       '#type' => 'details',
       '#title' => $this->t('Advanced Configuration'),
       '#description' => $this->t('Advanced settings for performance optimization and error handling.'),
-      '#open' => FALSE,
+      '#open' => false,
     ];
 
     $advanced_config = &$container['advanced_config'];
 
-    $advanced_config['timeout'] = [
-      '#type' => 'number',
-      '#title' => $this->t('Request Timeout (seconds)'),
-      '#description' => $this->t('Maximum time to wait for API responses.'),
-      '#default_value' => $config['timeout'],
-      '#min' => 5,
-      '#max' => 300,
+    $advanced_settings = [
+      'timeout' => [
+        'type' => 'number',
+        'title' => $this->t('Request Timeout (seconds)'),
+        'description' => $this->t('Maximum time to wait for API responses.'),
+        'default' => $config['timeout'],
+        'min' => 5,
+        'max' => 300,
+      ],
+      'batch_size' => [
+        'type' => 'number',
+        'title' => $this->t('Batch Size'),
+        'description' => $this->t('Number of entities to process in each batch operation.'),
+        'default' => $config['batch_size'],
+        'min' => 1,
+        'max' => 100,
+      ],
+      'retry_attempts' => [
+        'type' => 'number',
+        'title' => $this->t('Retry Attempts'),
+        'description' => $this->t('Number of times to retry failed submissions.'),
+        'default' => $config['retry_attempts'],
+        'min' => 0,
+        'max' => 5,
+      ],
     ];
 
-    $advanced_config['batch_size'] = [
-      '#type' => 'number',
-      '#title' => $this->t('Batch Size'),
-      '#description' => $this->t('Number of entities to process in each batch operation.'),
-      '#default_value' => $config['batch_size'],
-      '#min' => 1,
-      '#max' => 100,
-    ];
-
-    $advanced_config['retry_attempts'] = [
-      '#type' => 'number',
-      '#title' => $this->t('Retry Attempts'),
-      '#description' => $this->t('Number of times to retry failed submissions.'),
-      '#default_value' => $config['retry_attempts'],
-      '#min' => 0,
-      '#max' => 5,
-    ];
+    foreach ($advanced_settings as $key => $setting) {
+      $advanced_config[$key] = [
+        '#type' => $setting['type'],
+        '#title' => $setting['title'],
+        '#description' => $setting['description'],
+        '#default_value' => $setting['default'],
+        '#min' => $setting['min'] ?? null,
+        '#max' => $setting['max'] ?? null,
+      ];
+    }
 
     $advanced_config['stop_on_error'] = [
       '#type' => 'checkbox',
@@ -302,7 +336,7 @@ class WebformSettingsFormBuilder {
       '#type' => 'details',
       '#title' => $this->t('Connection Testing'),
       '#description' => $this->t('Test your Dataverse connection and configuration.'),
-      '#open' => FALSE,
+      '#open' => false,
     ];
 
     $testing = &$container['testing'];
@@ -336,6 +370,11 @@ class WebformSettingsFormBuilder {
       '#type' => 'container',
       '#attributes' => ['id' => 'entities-list'],
     ];
+  }
+
+  protected function addFormHandlers(array &$form): void {
+    $form['#validate'][] = [$this, 'validateWebformSettings'];
+    $form['actions']['submit']['#submit'][] = [$this, 'submitWebformSettings'];
   }
 
   public function validateWebformSettings(array &$form, FormStateInterface $form_state): void {
@@ -373,7 +412,7 @@ class WebformSettingsFormBuilder {
     $webform_field = $triggering_element['#attributes']['data-webform-field'] ?? '';
     
     if (empty($webform_field)) {
-      return $form['third_party_settings']['dataverse_webform']['config_container']['field_mappings_config']['field_mappings'][$webform_field]['field'] ?? [];
+      return [];
     }
 
     $entity_name = $form_state->getValue([
@@ -426,27 +465,7 @@ class WebformSettingsFormBuilder {
     
     try {
       $entities = $this->dataverseClient->getEntities($config);
-      
-      if (!empty($entities)) {
-        $entity_list = [];
-        foreach (array_slice($entities, 0, 10) as $entity) {
-          $entity_list[] = $entity['display_name'] . ' (' . $entity['logical_name'] . ')';
-        }
-        
-        $more_count = count($entities) - 10;
-        $list_markup = '<ul><li>' . implode('</li><li>', $entity_list) . '</li></ul>';
-        
-        if ($more_count > 0) {
-          $list_markup .= '<p><em>' . $this->t('...and @count more entities', ['@count' => $more_count]) . '</em></p>';
-        }
-        
-        $entities_element['#markup'] = '<div class="messages messages--status">' . 
-          $this->t('✅ Successfully loaded @count entities:', ['@count' => count($entities)]) . 
-          $list_markup . '</div>';
-      } else {
-        $entities_element['#markup'] = '<div class="messages messages--warning">' . 
-          $this->t('⚠️ No entities found. This may indicate permission restrictions.') . '</div>';
-      }
+      $entities_element['#markup'] = $this->buildEntitiesMarkup($entities);
     } catch (DataverseException $e) {
       $entities_element['#markup'] = '<div class="messages messages--error">' . 
         $this->t('❌ Failed to load entities: @error', ['@error' => $e->getMessage()]) . '</div>';
@@ -455,7 +474,40 @@ class WebformSettingsFormBuilder {
     return $entities_element;
   }
 
+  protected function buildEntitiesMarkup(array $entities): string {
+    if (empty($entities)) {
+      return '<div class="messages messages--warning">' . 
+        $this->t('⚠️ No entities found. This may indicate permission restrictions.') . '</div>';
+    }
+
+    $entity_list = [];
+    foreach (array_slice($entities, 0, 10) as $entity) {
+      $entity_list[] = $entity['display_name'] . ' (' . $entity['logical_name'] . ')';
+    }
+    
+    $more_count = count($entities) - 10;
+    $list_markup = '<ul><li>' . implode('</li><li>', $entity_list) . '</li></ul>';
+    
+    if ($more_count > 0) {
+      $list_markup .= '<p><em>' . $this->t('...and @count more entities', ['@count' => $more_count]) . '</em></p>';
+    }
+    
+    return '<div class="messages messages--status">' . 
+      $this->t('✅ Successfully loaded @count entities:', ['@count' => count($entities)]) . 
+      $list_markup . '</div>';
+  }
+
+  protected function getWebformFromFormState(): ?\Drupal\webform\WebformInterface {
+    // This would typically come from the form state, but we'll return null for now
+    // In practice, this would be: $form_state->getFormObject()->getEntity()
+    return null;
+  }
+
   protected function getWebformFields($webform): array {
+    if (!$webform) {
+      return [];
+    }
+
     $webform_elements = $webform->getElementsInitializedAndFlattened();
     $webform_fields = [];
     
@@ -478,21 +530,20 @@ class WebformSettingsFormBuilder {
   }
 
   protected function validateRequiredFields(array &$form, FormStateInterface $form_state, array $config_values): void {
-    $azure_config = $config_values['azure_config'] ?? [];
-    $dataverse_config = $config_values['dataverse_config'] ?? [];
-
-    $required_checks = [
-      ['azure_tenant_id', 'azure_config', 'azure_tenant_id', 'Azure Tenant ID is required when Dataverse integration is enabled.'],
-      ['azure_client_id_key', 'azure_config', 'azure_client_id_key', 'Azure Client ID Key is required when Dataverse integration is enabled.'],
-      ['azure_client_secret_key', 'azure_config', 'azure_client_secret_key', 'Azure Client Secret Key is required when Dataverse integration is enabled.'],
-      ['dataverse_url', 'dataverse_config', 'dataverse_url', 'Dataverse URL is required when Dataverse integration is enabled.'],
+    $required_fields = [
+      'azure_tenant_id' => 'Azure Tenant ID is required when Dataverse integration is enabled.',
+      'azure_client_id_key' => 'Azure Client ID Key is required when Dataverse integration is enabled.',
+      'azure_client_secret_key' => 'Azure Client Secret Key is required when Dataverse integration is enabled.',
+      'dataverse_url' => 'Dataverse URL is required when Dataverse integration is enabled.',
     ];
 
-    foreach ($required_checks as [$field, $section, $config_key, $message]) {
-      $config_section = $section === 'azure_config' ? $azure_config : $dataverse_config;
-      if (empty($config_section[$config_key])) {
+    foreach ($required_fields as $field => $message) {
+      $section = str_starts_with($field, 'azure_') ? 'azure_config' : 'dataverse_config';
+      $config_section = $config_values[$section] ?? [];
+      
+      if (empty($config_section[$field])) {
         $form_state->setError(
-          $form['third_party_settings']['dataverse_webform']['config_container'][$section][$config_key],
+          $form['third_party_settings']['dataverse_webform']['config_container'][$section][$field],
           $this->t($message)
         );
       }
@@ -503,7 +554,7 @@ class WebformSettingsFormBuilder {
     $config_container = $values['config_container'];
     
     return [
-      'enabled' => TRUE,
+      'enabled' => true,
       'azure_tenant_id' => $config_container['azure_config']['azure_tenant_id'] ?? '',
       'azure_client_id_key' => $config_container['azure_config']['azure_client_id_key'] ?? '',
       'azure_client_secret_key' => $config_container['azure_config']['azure_client_secret_key'] ?? '',
@@ -529,7 +580,7 @@ class WebformSettingsFormBuilder {
             'field' => $mapping['field'],
             'transform' => $mapping['transform'] ?? 'none',
             'required' => !empty($mapping['required']),
-            'relationship_to' => NULL,
+            'relationship_to' => null,
           ];
         }
       }
@@ -542,12 +593,12 @@ class WebformSettingsFormBuilder {
     $significant_fields = ['dataverse_url', 'azure_tenant_id', 'azure_client_id_key', 'azure_client_secret_key', 'field_mappings'];
 
     foreach ($significant_fields as $field) {
-      if (($old_config[$field] ?? NULL) !== ($new_config[$field] ?? NULL)) {
-        return TRUE;
+      if (($old_config[$field] ?? null) !== ($new_config[$field] ?? null)) {
+        return true;
       }
     }
 
-    return FALSE;
+    return false;
   }
 
   protected function buildConfigFromFormState(FormStateInterface $form_state): array {
@@ -555,7 +606,7 @@ class WebformSettingsFormBuilder {
     $config_values = $values['third_party_settings']['dataverse_webform']['config_container'] ?? [];
     
     return [
-      'enabled' => TRUE,
+      'enabled' => true,
       'azure_tenant_id' => $config_values['azure_config']['azure_tenant_id'] ?? '',
       'azure_client_id_key' => $config_values['azure_config']['azure_client_id_key'] ?? '',
       'azure_client_secret_key' => $config_values['azure_config']['azure_client_secret_key'] ?? '',

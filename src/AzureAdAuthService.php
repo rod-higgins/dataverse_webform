@@ -19,6 +19,7 @@ class AzureAdAuthService {
   public const TOKEN_EXPIRATION_BUFFER = 60;
   public const MAX_TOKEN_LIFETIME = 86400;
   public const LOCK_TIMEOUT = 30;
+  public const LOCK_WAIT_TIME = 500000; // 500ms in microseconds
 
   protected ClientFactory $httpClientFactory;
   protected LoggerChannelFactoryInterface $loggerFactory;
@@ -90,15 +91,12 @@ class AzureAdAuthService {
     $cache_key = $this->buildCacheKey($config);
     $cached_data = $this->state->get($cache_key);
 
-    if (!is_array($cached_data)) {
+    if (!$this->isValidCacheData($cached_data)) {
       return null;
     }
 
-    $expires = $cached_data['expires'] ?? 0;
-    $token = $cached_data['token'] ?? '';
-    
-    if (!empty($token) && $expires > time()) {
-      return $token;
+    if ($cached_data['expires'] > time()) {
+      return $cached_data['token'];
     }
 
     return null;
@@ -110,20 +108,28 @@ class AzureAdAuthService {
     
     if ($this->lock->acquire($lock_key, self::LOCK_TIMEOUT)) {
       try {
-        // Check again in case another process refreshed it
-        $cached_token = $this->getCachedToken($config);
-        if ($cached_token) {
-          return $cached_token;
-        }
-
-        return $this->refreshAccessToken($config);
+        return $this->handleTokenRefresh($config);
       } finally {
         $this->lock->release($lock_key);
       }
     }
     
-    // Wait for other process and check again
-    usleep(500000); // Wait 500ms
+    return $this->waitAndRetryToken($config);
+  }
+
+  protected function handleTokenRefresh(array $config): ?string {
+    // Check again in case another process refreshed it
+    $cached_token = $this->getCachedToken($config);
+    if ($cached_token) {
+      return $cached_token;
+    }
+
+    return $this->refreshAccessToken($config);
+  }
+
+  protected function waitAndRetryToken(array $config): ?string {
+    usleep(self::LOCK_WAIT_TIME);
+    
     $cached_token = $this->getCachedToken($config);
     if ($cached_token) {
       return $cached_token;
@@ -141,13 +147,7 @@ class AzureAdAuthService {
       $body = $this->parseTokenResponse($response);
       
       if (isset($body['access_token'])) {
-        $token = $body['access_token'];
-        $expires_in = min((int) ($body['expires_in'] ?? 3600), self::MAX_TOKEN_LIFETIME);
-        
-        $this->cacheToken($config, $token, $expires_in);
-        $this->logSuccessfulTokenRefresh($expires_in);
-        
-        return $token;
+        return $this->processTokenResponse($config, $body);
       }
 
       $this->handleTokenError($body);
@@ -157,6 +157,16 @@ class AzureAdAuthService {
     }
 
     return null;
+  }
+
+  protected function processTokenResponse(array $config, array $body): string {
+    $token = $body['access_token'];
+    $expires_in = min((int) ($body['expires_in'] ?? 3600), self::MAX_TOKEN_LIFETIME);
+    
+    $this->cacheToken($config, $token, $expires_in);
+    $this->logSuccessfulTokenRefresh($expires_in);
+    
+    return $token;
   }
 
   protected function makeTokenRequest(array $config, array $credentials): \Psr\Http\Message\ResponseInterface {
@@ -266,6 +276,12 @@ class AzureAdAuthService {
     return 'dataverse_webform.token.' . hash('sha256', serialize($cache_config));
   }
 
+  protected function isValidCacheData($cached_data): bool {
+    return is_array($cached_data) && 
+           !empty($cached_data['token']) && 
+           !empty($cached_data['expires']);
+  }
+
   protected function validateAuthConfig(array $config): void {
     $this->validateRequiredFields($config);
     $this->validateTenantIdFormat($config['azure_tenant_id']);
@@ -289,7 +305,7 @@ class AzureAdAuthService {
   }
 
   protected function validateDataverseUrl(string $dataverse_url): void {
-    if (!filter_var($dataverse_url, FILTER_VALIDATE_URL) || strpos($dataverse_url, 'https://') !== 0) {
+    if (!filter_var($dataverse_url, FILTER_VALIDATE_URL) || !str_starts_with($dataverse_url, 'https://')) {
       throw new DataverseException('Dataverse URL must be a valid HTTPS URL');
     }
   }

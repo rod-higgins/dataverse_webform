@@ -97,7 +97,7 @@ class DataverseCacheManager {
   public function invalidateEntityCache(array $config, string $entity_name): void {
     $tags = [
       'dataverse_webform:fields:' . $entity_name,
-      'dataverse_webform:config:' . hash('sha256', $config['dataverse_url'] ?? ''),
+      'dataverse_webform:config:' . $this->generateConfigHash(['url' => $config['dataverse_url'] ?? '']),
     ];
     
     Cache::invalidateTags($tags);
@@ -123,12 +123,38 @@ class DataverseCacheManager {
       'cache_bin' => self::CACHE_BIN,
       'default_ttl' => self::DEFAULT_TTL,
       'timestamp' => time(),
+      'cache_hits' => $this->getCacheHitCount(),
+      'cache_misses' => $this->getCacheMissCount(),
     ];
+  }
+
+  public function warmupCache(array $config): void {
+    try {
+      // This would typically pre-populate cache with commonly accessed data
+      $this->loggerFactory->get('dataverse_webform')->info(
+        'Cache warmup initiated for configuration'
+      );
+      
+      // Implementation would depend on specific caching strategy
+      // For now, just log the action
+    } catch (\Exception $e) {
+      $this->loggerFactory->get('dataverse_webform')->error(
+        'Cache warmup failed: @error',
+        ['@error' => $e->getMessage()]
+      );
+    }
   }
 
   protected function getCachedData(string $cache_key) {
     $cached = $this->cache->get($cache_key);
-    return $cached ? $cached->data : null;
+    
+    if ($cached) {
+      $this->incrementCacheHitCount();
+      return $cached->data;
+    }
+    
+    $this->incrementCacheMissCount();
+    return null;
   }
 
   protected function setCachedData(string $cache_key, $data, array $cache_tags, int $ttl): void {
@@ -210,6 +236,25 @@ class DataverseCacheManager {
   }
 
   protected function generateConfigHash(array $config): string {
+    ksort($config); // Ensure consistent ordering for hashing
     return hash('sha256', serialize($config));
+  }
+
+  protected function getCacheHitCount(): int {
+    return \Drupal::state()->get('dataverse_webform:cache_hits', 0);
+  }
+
+  protected function getCacheMissCount(): int {
+    return \Drupal::state()->get('dataverse_webform:cache_misses', 0);
+  }
+
+  protected function incrementCacheHitCount(): void {
+    $count = $this->getCacheHitCount() + 1;
+    \Drupal::state()->set('dataverse_webform:cache_hits', $count);
+  }
+
+  protected function incrementCacheMissCount(): void {
+    $count = $this->getCacheMissCount() + 1;
+    \Drupal::state()->set('dataverse_webform:cache_misses', $count);
   }
 }

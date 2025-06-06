@@ -11,38 +11,57 @@
    */
   Drupal.behaviors.dataverseAdmin = {
     attach: function (context, settings) {
-      // Initialize auto-mapping functionality
-      $('.button[data-webform-field]', context).once('dataverse-auto-map').on('click', function (e) {
-        e.preventDefault();
-        var $button = $(this);
-        var webformField = $button.data('webform-field');
-        var rowIndex = $button.data('row-index');
-        
-        Drupal.dataverseAdmin.autoMapField(webformField, rowIndex);
-      });
+      this.initializeAutoMapping(context);
+      this.initializeEntityFieldLoading(context);
+      this.initializeConfigValidation(context);
+      this.initializeTooltips(context);
+    },
 
-      // Initialize field mapping suggestions
-      $('.field-mapping-entity-select', context).once('dataverse-entity-change').on('change', function () {
-        var $select = $(this);
-        var entityName = $select.val();
-        var webformField = $select.data('webform-field');
-        var rowIndex = $select.data('row-index');
-        
-        if (entityName && webformField) {
-          Drupal.dataverseAdmin.loadFieldSuggestions(entityName, webformField, rowIndex);
-        }
-      });
+    initializeAutoMapping: function (context) {
+      $('.button[data-webform-field]', context)
+        .once('dataverse-auto-map')
+        .on('click', this.handleAutoMapClick);
+    },
 
-      // Initialize configuration validation
+    initializeEntityFieldLoading: function (context) {
+      $('.field-mapping-entity-select', context)
+        .once('dataverse-entity-change')
+        .on('change', this.handleEntityChange);
+    },
+
+    initializeConfigValidation: function (context) {
       if ($('#edit-third-party-settings-dataverse-webform-enabled', context).length) {
         Drupal.dataverseAdmin.initConfigValidation(context);
       }
+    },
 
-      // Initialize tooltips
-      $('.field-info-tooltip', context).once('dataverse-tooltip').tooltip({
-        placement: 'top',
-        trigger: 'hover'
-      });
+    initializeTooltips: function (context) {
+      $('.field-info-tooltip', context)
+        .once('dataverse-tooltip')
+        .tooltip({
+          placement: 'top',
+          trigger: 'hover'
+        });
+    },
+
+    handleAutoMapClick: function (e) {
+      e.preventDefault();
+      const $button = $(this);
+      const webformField = $button.data('webform-field');
+      const rowIndex = $button.data('row-index');
+      
+      Drupal.dataverseAdmin.autoMapField(webformField, rowIndex);
+    },
+
+    handleEntityChange: function () {
+      const $select = $(this);
+      const entityName = $select.val();
+      const webformField = $select.data('webform-field');
+      const rowIndex = $select.data('row-index');
+      
+      if (entityName && webformField) {
+        Drupal.dataverseAdmin.loadFieldSuggestions(entityName, webformField, rowIndex);
+      }
     }
   };
 
@@ -55,46 +74,72 @@
      * Auto-map a webform field to suggested Dataverse fields.
      */
     autoMapField: function (webformField, rowIndex) {
-      var $row = $('[data-row-index="' + rowIndex + '"]');
-      var entitySelect = $row.find('select[name*="[entity]"]');
-      var fieldSelect = $row.find('select[name*="[field]"]');
-      var transformSelect = $row.find('select[name*="[transform]"]');
+      const $row = this.getRowElement(rowIndex);
+      const entitySelect = $row.find('select[name*="[entity]"]');
+      const fieldSelect = $row.find('select[name*="[field]"]');
+      const transformSelect = $row.find('select[name*="[transform]"]');
       
-      var entityName = entitySelect.val();
+      const entityName = entitySelect.val();
       if (!entityName) {
-        Drupal.dataverseAdmin.showMessage('Please select an entity first.', 'warning');
+        this.showMessage('Please select an entity first.', 'warning');
         return;
       }
 
-      var $button = $('[data-webform-field="' + webformField + '"][data-row-index="' + rowIndex + '"]');
-      var originalText = $button.val();
-      $button.val('Mapping...').prop('disabled', true);
+      this.setButtonLoadingState(webformField, rowIndex, true);
 
-      var suggestions = Drupal.dataverseAdmin.getFieldSuggestions(webformField, entityName);
+      const suggestions = this.getFieldSuggestions(webformField, entityName);
       
       if (suggestions.length > 0) {
-        var bestMatch = suggestions[0];
-        fieldSelect.val(bestMatch.field);
-        
-        var suggestedTransform = Drupal.dataverseAdmin.suggestTransform(webformField, bestMatch.field);
-        if (suggestedTransform) {
-          transformSelect.val(suggestedTransform);
-        }
-        
-        Drupal.dataverseAdmin.showMessage(
-          'Auto-mapped "' + webformField + '" to "' + bestMatch.field + '" (' + bestMatch.confidence + '% confidence)',
-          'status'
-        );
+        this.applyBestSuggestion(suggestions[0], fieldSelect, transformSelect, webformField);
       } else {
-        Drupal.dataverseAdmin.showMessage(
-          'No suitable mapping found for "' + webformField + '"',
-          'warning'
-        );
+        this.showMessage(`No suitable mapping found for "${webformField}"`, 'warning');
       }
 
-      setTimeout(function () {
-        $button.val(originalText).prop('disabled', false);
-      }, 1000);
+      this.setButtonLoadingState(webformField, rowIndex, false);
+    },
+
+    /**
+     * Get row element by index or webform field.
+     */
+    getRowElement: function (identifier) {
+      return typeof identifier === 'number' 
+        ? $('[data-row-index="' + identifier + '"]')
+        : $('[data-webform-field="' + identifier + '"]').closest('tr');
+    },
+
+    /**
+     * Set loading state for auto-map button.
+     */
+    setButtonLoadingState: function (webformField, rowIndex, isLoading) {
+      const $button = $('[data-webform-field="' + webformField + '"]');
+      const originalText = $button.data('original-text') || $button.val();
+      
+      if (isLoading) {
+        $button.data('original-text', originalText)
+               .val('Mapping...')
+               .prop('disabled', true);
+      } else {
+        setTimeout(() => {
+          $button.val(originalText).prop('disabled', false);
+        }, 1000);
+      }
+    },
+
+    /**
+     * Apply the best field suggestion.
+     */
+    applyBestSuggestion: function (suggestion, fieldSelect, transformSelect, webformField) {
+      fieldSelect.val(suggestion.field);
+      
+      const suggestedTransform = this.suggestTransform(webformField, suggestion.field);
+      if (suggestedTransform) {
+        transformSelect.val(suggestedTransform);
+      }
+      
+      this.showMessage(
+        `Auto-mapped "${webformField}" to "${suggestion.field}" (${suggestion.confidence}% confidence)`,
+        'status'
+      );
     },
 
     /**
@@ -102,13 +147,39 @@
      */
     loadFieldSuggestions: function (entityName, webformField, rowIndex) {
       console.log('Loading field suggestions for entity:', entityName, 'field:', webformField);
+      // This would typically make an AJAX request to load suggestions
+      // For now, we'll just log the action
     },
 
     /**
      * Get field mapping suggestions based on field names.
      */
     getFieldSuggestions: function (webformField, entityName) {
-      var commonMappings = {
+      const commonMappings = this.getCommonMappings();
+      const webformLower = webformField.toLowerCase();
+      const suggestions = [];
+
+      // Check for exact mappings
+      if (commonMappings[webformLower]) {
+        suggestions.push(...this.createSuggestionsFromMapping(commonMappings[webformLower], 'Common mapping pattern'));
+      }
+
+      // Check for partial matches
+      Object.keys(commonMappings).forEach(pattern => {
+        if (webformLower.indexOf(pattern) !== -1 && !commonMappings[webformLower]) {
+          const mapping = commonMappings[pattern];
+          suggestions.push(...this.createSuggestionsFromMapping(mapping, 'Partial name match', -20));
+        }
+      });
+
+      return suggestions.sort((a, b) => b.confidence - a.confidence);
+    },
+
+    /**
+     * Get common field mappings configuration.
+     */
+    getCommonMappings: function () {
+      return {
         'first_name': { targets: ['firstname', 'fname'], confidence: 90 },
         'last_name': { targets: ['lastname', 'lname', 'surname'], confidence: 90 },
         'email': { targets: ['emailaddress1', 'email'], confidence: 95 },
@@ -123,61 +194,36 @@
         'website': { targets: ['websiteurl'], confidence: 85 },
         'description': { targets: ['description'], confidence: 70 }
       };
+    },
 
-      var webformLower = webformField.toLowerCase();
-      var suggestions = [];
-
-      // Check for exact mappings
-      if (commonMappings[webformLower]) {
-        var mapping = commonMappings[webformLower];
-        mapping.targets.forEach(function (target) {
-          suggestions.push({
-            field: target,
-            confidence: mapping.confidence,
-            reason: 'Common mapping pattern'
-          });
-        });
-      }
-
-      // Check for partial matches
-      for (var pattern in commonMappings) {
-        if (webformLower.indexOf(pattern) !== -1 && !commonMappings[webformLower]) {
-          var mapping = commonMappings[pattern];
-          mapping.targets.forEach(function (target) {
-            suggestions.push({
-              field: target,
-              confidence: mapping.confidence - 20,
-              reason: 'Partial name match'
-            });
-          });
-        }
-      }
-
-      suggestions.sort(function (a, b) {
-        return b.confidence - a.confidence;
-      });
-
-      return suggestions;
+    /**
+     * Create suggestions from mapping configuration.
+     */
+    createSuggestionsFromMapping: function (mapping, reason, confidenceAdjustment = 0) {
+      return mapping.targets.map(target => ({
+        field: target,
+        confidence: mapping.confidence + confidenceAdjustment,
+        reason: reason
+      }));
     },
 
     /**
      * Suggest appropriate transform type based on field names.
      */
     suggestTransform: function (webformField, dataverseField) {
-      var webformLower = webformField.toLowerCase();
-      var dataverseLower = dataverseField.toLowerCase();
+      const webformLower = webformField.toLowerCase();
+      const dataverseLower = dataverseField.toLowerCase();
 
-      var transformMappings = [
-        {pattern: 'email', transform: 'email'},
-        {pattern: 'phone|telephone', transform: 'phone'},
-        {pattern: 'date', transform: 'date'},
-        {pattern: 'url|website', transform: 'url'},
-        {pattern: '^(is|has|do)', transform: 'boolean'}
+      const transformMappings = [
+        { pattern: 'email', transform: 'email' },
+        { pattern: 'phone|telephone', transform: 'phone' },
+        { pattern: 'date', transform: 'date' },
+        { pattern: 'url|website', transform: 'url' },
+        { pattern: '^(is|has|do)', transform: 'boolean' }
       ];
 
-      for (var i = 0; i < transformMappings.length; i++) {
-        var mapping = transformMappings[i];
-        var regex = new RegExp(mapping.pattern);
+      for (const mapping of transformMappings) {
+        const regex = new RegExp(mapping.pattern);
         if (regex.test(webformLower) || regex.test(dataverseLower)) {
           return mapping.transform;
         }
@@ -190,40 +236,66 @@
      * Initialize configuration validation.
      */
     initConfigValidation: function (context) {
-      var $form = $('#webform-admin-form', context);
-      var validationTimer;
+      const $form = $('#webform-admin-form', context);
+      let validationTimer;
 
-      $form.find('input, select', context).once('dataverse-validation').on('change blur', function () {
-        clearTimeout(validationTimer);
-        validationTimer = setTimeout(function () {
-          Drupal.dataverseAdmin.validateConfiguration();
-        }, 1000);
-      });
+      $form.find('input, select', context)
+           .once('dataverse-validation')
+           .on('change blur', () => {
+             clearTimeout(validationTimer);
+             validationTimer = setTimeout(() => this.validateConfiguration(), 1000);
+           });
     },
 
     /**
      * Validate current configuration.
      */
     validateConfiguration: function () {
-      var config = Drupal.dataverseAdmin.gatherConfiguration();
+      const config = this.gatherConfiguration();
       
       if (!config.enabled) {
         return;
       }
 
-      var errors = [];
-      var warnings = [];
+      const { errors, warnings } = this.runValidationRules(config);
+      this.displayValidationResults(errors, warnings);
+    },
 
-      var validationRules = [
-        {field: 'azure_tenant_id', required: true, pattern: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, message: 'Azure Tenant ID must be in GUID format'},
-        {field: 'dataverse_url', required: true, pattern: /^https:\/\//, message: 'Dataverse URL should use HTTPS'},
-        {field: 'azure_client_id_key', required: true, message: 'Azure Client ID Key is required'},
-        {field: 'azure_client_secret_key', required: true, message: 'Azure Client Secret Key is required'}
+    /**
+     * Run validation rules against configuration.
+     */
+    runValidationRules: function (config) {
+      const errors = [];
+      const warnings = [];
+
+      const validationRules = [
+        {
+          field: 'azure_tenant_id',
+          required: true,
+          pattern: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+          message: 'Azure Tenant ID must be in GUID format'
+        },
+        {
+          field: 'dataverse_url',
+          required: true,
+          pattern: /^https:\/\//,
+          message: 'Dataverse URL should use HTTPS'
+        },
+        {
+          field: 'azure_client_id_key',
+          required: true,
+          message: 'Azure Client ID Key is required'
+        },
+        {
+          field: 'azure_client_secret_key',
+          required: true,
+          message: 'Azure Client Secret Key is required'
+        }
       ];
 
-      validationRules.forEach(function(rule) {
+      validationRules.forEach(rule => {
         if (rule.required && !config[rule.field]) {
-          errors.push(rule.message || rule.field + ' is required');
+          errors.push(rule.message || `${rule.field} is required`);
         } else if (config[rule.field] && rule.pattern && !rule.pattern.test(config[rule.field])) {
           if (rule.field === 'dataverse_url') {
             warnings.push(rule.message);
@@ -233,7 +305,7 @@
         }
       });
 
-      Drupal.dataverseAdmin.displayValidationResults(errors, warnings);
+      return { errors, warnings };
     },
 
     /**
@@ -253,46 +325,62 @@
      * Display validation results.
      */
     displayValidationResults: function (errors, warnings) {
-      $('.dataverse-validation-message').remove();
+      this.clearValidationMessages();
 
-      var $container = $('#edit-third-party-settings-dataverse-webform');
+      const $container = $('#edit-third-party-settings-dataverse-webform');
       
       if (errors.length > 0) {
-        var $errorDiv = $('<div class="messages messages--error dataverse-validation-message">')
-          .append('<h3>Configuration Errors:</h3>')
-          .append('<ul><li>' + errors.join('</li><li>') + '</li></ul>');
-        $container.prepend($errorDiv);
+        $container.prepend(this.createValidationMessage('error', 'Configuration Errors:', errors));
       }
 
       if (warnings.length > 0) {
-        var $warningDiv = $('<div class="messages messages--warning dataverse-validation-message">')
-          .append('<h3>Configuration Warnings:</h3>')
-          .append('<ul><li>' + warnings.join('</li><li>') + '</li></ul>');
-        $container.prepend($warningDiv);
+        $container.prepend(this.createValidationMessage('warning', 'Configuration Warnings:', warnings));
       }
 
       if (errors.length === 0 && warnings.length === 0) {
-        var $successDiv = $('<div class="messages messages--status dataverse-validation-message">')
-          .append('✅ Configuration appears valid');
-        $container.prepend($successDiv);
+        $container.prepend(this.createValidationMessage('status', '', ['✅ Configuration appears valid']));
       }
+    },
+
+    /**
+     * Create validation message element.
+     */
+    createValidationMessage: function (type, title, messages) {
+      const $message = $('<div class="messages messages--' + type + ' dataverse-validation-message">');
+      
+      if (title) {
+        $message.append('<h3>' + title + '</h3>');
+      }
+      
+      if (messages.length > 1) {
+        $message.append('<ul><li>' + messages.join('</li><li>') + '</li></ul>');
+      } else {
+        $message.append(messages[0]);
+      }
+      
+      return $message;
+    },
+
+    /**
+     * Clear existing validation messages.
+     */
+    clearValidationMessages: function () {
+      $('.dataverse-validation-message').remove();
     },
 
     /**
      * Show a temporary message.
      */
     showMessage: function (message, type) {
-      var $message = $('<div class="messages messages--' + type + ' dataverse-temp-message">')
+      const $message = $('<div class="messages messages--' + type + ' dataverse-temp-message">')
         .text(message)
         .hide()
         .fadeIn();
 
       $('#field-mapping-wrapper').prepend($message);
 
-      setTimeout(function () {
-        $message.fadeOut(function () {
-          $message.remove();
-        });
+      setTimeout(() => {
+        $message.fadeOut(() => $message.remove());
       }, 5000);
     },
 
@@ -302,15 +390,11 @@
     highlightValidationIssues: function (issues) {
       $('.form-item').removeClass('has-error has-warning');
 
-      issues.forEach(function (issue) {
-        var $element = $('#' + issue.field_id);
-        var $formItem = $element.closest('.form-item');
+      issues.forEach(issue => {
+        const $element = $('#' + issue.field_id);
+        const $formItem = $element.closest('.form-item');
         
-        if (issue.severity === 'error') {
-          $formItem.addClass('has-error');
-        } else if (issue.severity === 'warning') {
-          $formItem.addClass('has-warning');
-        }
+        $formItem.addClass(issue.severity === 'error' ? 'has-error' : 'has-warning');
       });
     }
   };
@@ -319,7 +403,7 @@
    * AJAX command to update field suggestions.
    */
   Drupal.AjaxCommands.prototype.dataverseUpdateSuggestions = function (ajax, response, status) {
-    var $target = $(response.selector);
+    const $target = $(response.selector);
     $target.html(response.data);
     Drupal.attachBehaviors($target[0]);
   };

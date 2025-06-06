@@ -80,12 +80,7 @@ class ValidationService {
   protected function validateRequiredFields(array $config): void {
     $required_fields = ['azure_tenant_id', 'azure_client_id_key', 'azure_client_secret_key', 'dataverse_url'];
 
-    $missing_fields = [];
-    foreach ($required_fields as $field) {
-      if (empty($config[$field])) {
-        $missing_fields[] = $field;
-      }
-    }
+    $missing_fields = array_filter($required_fields, fn($field) => empty($config[$field]));
     
     if (!empty($missing_fields)) {
       throw new DataverseException('Missing required configuration: ' . implode(', ', $missing_fields));
@@ -104,7 +99,7 @@ class ValidationService {
   }
 
   protected function validateDataverseUrl(string $url): void {
-    if (!filter_var($url, FILTER_VALIDATE_URL) || strpos($url, 'https://') !== 0) {
+    if (!filter_var($url, FILTER_VALIDATE_URL) || !str_starts_with($url, 'https://')) {
       throw new DataverseException('Dataverse URL must be a valid HTTPS URL');
     }
   }
@@ -137,45 +132,31 @@ class ValidationService {
     $entities_used = [];
     
     foreach ($field_mappings as $webform_field => $mapping) {
-      if (!is_array($mapping)) {
-        throw new DataverseException("Invalid mapping configuration for field '{$webform_field}'");
-      }
-
-      $this->validateMappingStructure($webform_field, $mapping);
-      $this->validateEntityName($mapping['entity']);
-      $this->validateFieldName($mapping['field']);
-
+      $this->validateSingleMapping($webform_field, $mapping);
       $entities_used[] = $mapping['entity'];
+    }
+  }
 
-      if (!empty($mapping['transform'])) {
-        $this->validateTransform($mapping['transform']);
-      }
+  protected function validateSingleMapping(string $webform_field, $mapping): void {
+    if (!is_array($mapping)) {
+      throw new DataverseException("Invalid mapping configuration for field '{$webform_field}'");
+    }
 
-      $this->validateRelationship($webform_field, $mapping, $entities_used);
+    $this->validateMappingStructure($webform_field, $mapping);
+    $this->validateEntityName($mapping['entity']);
+    $this->validateFieldName($mapping['field']);
+
+    if (!empty($mapping['transform'])) {
+      $this->validateTransform($mapping['transform']);
     }
   }
 
   protected function validateMappingStructure(string $webform_field, array $mapping): void {
     $required_fields = ['entity', 'field'];
-    $missing_fields = [];
-    
-    foreach ($required_fields as $field) {
-      if (empty($mapping[$field])) {
-        $missing_fields[] = $field;
-      }
-    }
+    $missing_fields = array_filter($required_fields, fn($field) => empty($mapping[$field]));
     
     if (!empty($missing_fields)) {
       throw new DataverseException("Missing '" . implode(', ', $missing_fields) . "' in mapping for webform field '{$webform_field}'");
-    }
-  }
-
-  protected function validateRelationship(string $webform_field, array $mapping, array $entities_used): void {
-    if (!empty($mapping['relationship_to']) && !in_array($mapping['relationship_to'], $entities_used)) {
-      $this->loggerFactory->get('dataverse_webform')->warning(
-        'Field mapping for @field references relationship_to @entity which is not mapped by any previous field',
-        ['@field' => $webform_field, '@entity' => $mapping['relationship_to']]
-      );
     }
   }
 

@@ -25,23 +25,14 @@ class SubmissionProcessor {
         continue;
       }
 
-      $webform_field = $mapping['webform_field'];
-      $entity_name = $mapping['entity'];
-      $dataverse_field = $mapping['field'];
-      $transform = $mapping['transform'] ?? 'none';
-
-      $value = $submission_data[$webform_field];
-      $transformed_value = $this->transformValue($value, $transform);
-
-      if ($this->shouldSkipEmptyValue($transformed_value, $mapping)) {
-        continue;
+      $processed_mapping = $this->processMapping($mapping, $submission_data);
+      if ($processed_mapping !== null) {
+        $entity_name = $mapping['entity'];
+        if (!isset($entities_data[$entity_name])) {
+          $entities_data[$entity_name] = [];
+        }
+        $entities_data[$entity_name][$mapping['field']] = $processed_mapping;
       }
-
-      if (!isset($entities_data[$entity_name])) {
-        $entities_data[$entity_name] = [];
-      }
-
-      $entities_data[$entity_name][$dataverse_field] = $transformed_value;
     }
 
     return $entities_data;
@@ -60,19 +51,33 @@ class SubmissionProcessor {
     return $sanitized_data;
   }
 
+  protected function processMapping(array $mapping, array $submission_data) {
+    $webform_field = $mapping['webform_field'];
+    $transform = $mapping['transform'] ?? 'none';
+    $value = $submission_data[$webform_field];
+
+    $transformed_value = $this->transformValue($value, $transform);
+
+    if ($this->shouldSkipEmptyValue($transformed_value, $mapping)) {
+      return null;
+    }
+
+    return $transformed_value;
+  }
+
   protected function isValidMapping(array $mapping, array $submission_data): bool {
     if (!is_array($mapping)) {
       return false;
     }
 
-    $webform_field = $mapping['webform_field'] ?? '';
-    $entity_name = $mapping['entity'] ?? '';
-    $dataverse_field = $mapping['field'] ?? '';
+    $required_fields = ['webform_field', 'entity', 'field'];
+    foreach ($required_fields as $field) {
+      if (empty($mapping[$field])) {
+        return false;
+      }
+    }
 
-    return !empty($webform_field) && 
-           !empty($entity_name) && 
-           !empty($dataverse_field) && 
-           isset($submission_data[$webform_field]);
+    return isset($submission_data[$mapping['webform_field']]);
   }
 
   protected function transformValue($value, string $transform) {
@@ -117,13 +122,13 @@ class SubmissionProcessor {
 
   protected function transformToNumber($value) {
     if (is_numeric($value)) {
-      return strpos($value, '.') !== false ? (float) $value : (int) $value;
+      return str_contains((string) $value, '.') ? (float) $value : (int) $value;
     }
 
     if (is_string($value)) {
       $cleaned = preg_replace('/[^0-9.-]/', '', $value);
       if (is_numeric($cleaned)) {
-        return strpos($cleaned, '.') !== false ? (float) $cleaned : (int) $cleaned;
+        return str_contains($cleaned, '.') ? (float) $cleaned : (int) $cleaned;
       }
     }
 
@@ -148,6 +153,7 @@ class SubmissionProcessor {
 
   protected function parseStringToBoolean(string $value): ?bool {
     $value = strtolower(trim($value));
+    
     $true_values = ['true', 'yes', 'on', '1', 'enabled', 'active'];
     $false_values = ['false', 'no', 'off', '0', 'disabled', 'inactive'];
 
@@ -196,7 +202,7 @@ class SubmissionProcessor {
     $phone = $this->transformToString($value);
     
     if ($phone) {
-      $cleaned = preg_replace('/[^0-9+\s]/', '', $phone);
+      $cleaned = preg_replace('/[^0-9+\s()-]/', '', $phone);
       return !empty($cleaned) ? $cleaned : null;
     }
 
@@ -212,7 +218,7 @@ class SubmissionProcessor {
 
     // Add protocol if missing
     if (!preg_match('/^https?:\/\//', $url)) {
-      $url = 'http://' . $url;
+      $url = 'https://' . $url;
     }
     
     return filter_var($url, FILTER_VALIDATE_URL) ? $url : null;
@@ -227,7 +233,7 @@ class SubmissionProcessor {
       }
     }
 
-    $json = json_encode($value, JSON_UNESCAPED_UNICODE);
+    $json = json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     return $json !== false ? $json : null;
   }
 
@@ -256,7 +262,7 @@ class SubmissionProcessor {
   }
 
   protected function sanitizeStringValue(string $value): ?string {
-    // Remove control characters
+    // Remove control characters except tabs and newlines
     $value = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', '', $value);
     $value = trim($value);
     
@@ -283,10 +289,6 @@ class SubmissionProcessor {
     }
 
     // Skip null, empty string, or empty array
-    if ($value === null || $value === '' || (is_array($value) && empty($value))) {
-      return true;
-    }
-
-    return false;
+    return $value === null || $value === '' || (is_array($value) && empty($value));
   }
 }

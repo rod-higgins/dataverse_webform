@@ -11,6 +11,10 @@ class ODataQueryBuilder {
 
   public const MAX_TOP_LIMIT = 5000;
   public const MAX_STRING_LENGTH = 1000;
+  public const ALLOWED_OPERATORS = [
+    'eq', 'ne', 'gt', 'ge', 'lt', 'le', 
+    'contains', 'startswith', 'endswith', 'in', 'not'
+  ];
 
   protected string $entitySet;
   protected array $select = [];
@@ -63,9 +67,7 @@ class ODataQueryBuilder {
 
   public function andWhere(array $conditions): self {
     foreach ($conditions as $condition) {
-      if (!isset($condition['field'], $condition['operator'], $condition['value'])) {
-        throw new DataverseException('Each filter condition must have field, operator, and value');
-      }
+      $this->validateCondition($condition);
       $this->filter($condition['field'], $condition['operator'], $condition['value']);
     }
     return $this;
@@ -73,10 +75,9 @@ class ODataQueryBuilder {
 
   public function orWhere(array $conditions): self {
     $or_filters = [];
+    
     foreach ($conditions as $condition) {
-      if (!isset($condition['field'], $condition['operator'], $condition['value'])) {
-        throw new DataverseException('Each filter condition must have field, operator, and value');
-      }
+      $this->validateCondition($condition);
       
       $sanitized_field = $this->sanitizeIdentifier($condition['field']);
       $sanitized_operator = $this->sanitizeOperator($condition['operator']);
@@ -140,6 +141,35 @@ class ODataQueryBuilder {
 
   public function build(): string {
     $url = $this->entitySet;
+    $query_params = $this->buildQueryParameters();
+
+    if (!empty($query_params)) {
+      $query_string = http_build_query($query_params);
+      if ($query_string === false) {
+        throw new DataverseException('Failed to build query string');
+      }
+      $url .= '?' . $query_string;
+    }
+
+    return $url;
+  }
+
+  public function reset(): self {
+    $this->select = [];
+    $this->filters = [];
+    $this->orderBy = [];
+    $this->top = null;
+    $this->skip = null;
+    $this->expand = [];
+    $this->count = false;
+    return $this;
+  }
+
+  public function clone(): self {
+    return clone $this;
+  }
+
+  protected function buildQueryParameters(): array {
     $query_params = [];
 
     if (!empty($this->select)) {
@@ -170,30 +200,13 @@ class ODataQueryBuilder {
       $query_params['$count'] = 'true';
     }
 
-    if (!empty($query_params)) {
-      $query_string = http_build_query($query_params);
-      if ($query_string === false) {
-        throw new DataverseException('Failed to build query string');
-      }
-      $url .= '?' . $query_string;
+    return $query_params;
+  }
+
+  protected function validateCondition(array $condition): void {
+    if (!isset($condition['field'], $condition['operator'], $condition['value'])) {
+      throw new DataverseException('Each filter condition must have field, operator, and value');
     }
-
-    return $url;
-  }
-
-  public function reset(): self {
-    $this->select = [];
-    $this->filters = [];
-    $this->orderBy = [];
-    $this->top = null;
-    $this->skip = null;
-    $this->expand = [];
-    $this->count = false;
-    return $this;
-  }
-
-  public function clone(): self {
-    return clone $this;
   }
 
   protected function sanitizeIdentifier(string $identifier): string {
@@ -207,11 +220,9 @@ class ODataQueryBuilder {
   }
 
   protected function sanitizeOperator(string $operator): string {
-    $allowed_operators = ['eq', 'ne', 'gt', 'ge', 'lt', 'le', 'contains', 'startswith', 'endswith', 'in', 'not'];
-    
     $operator = strtolower(trim($operator));
     
-    if (!in_array($operator, $allowed_operators)) {
+    if (!in_array($operator, self::ALLOWED_OPERATORS)) {
       throw new DataverseException("Invalid operator: {$operator}");
     }
     
@@ -232,20 +243,11 @@ class ODataQueryBuilder {
     }
     
     if (is_string($value)) {
-      if (strlen($value) > self::MAX_STRING_LENGTH) {
-        throw new DataverseException('String value exceeds maximum length of ' . self::MAX_STRING_LENGTH . ' characters');
-      }
-      
-      $escaped = str_replace("'", "''", $value);
-      return "'{$escaped}'";
+      return $this->sanitizeStringValue($value);
     }
     
     if (is_array($value)) {
-      $sanitized_items = [];
-      foreach ($value as $item) {
-        $sanitized_items[] = $this->sanitizeValue($item);
-      }
-      return '(' . implode(',', $sanitized_items) . ')';
+      return $this->sanitizeArrayValue($value);
     }
     
     if (is_object($value) && method_exists($value, '__toString')) {
@@ -253,5 +255,22 @@ class ODataQueryBuilder {
     }
     
     throw new DataverseException('Unsupported value type for OData query: ' . gettype($value));
+  }
+
+  protected function sanitizeStringValue(string $value): string {
+    if (strlen($value) > self::MAX_STRING_LENGTH) {
+      throw new DataverseException('String value exceeds maximum length of ' . self::MAX_STRING_LENGTH . ' characters');
+    }
+    
+    $escaped = str_replace("'", "''", $value);
+    return "'{$escaped}'";
+  }
+
+  protected function sanitizeArrayValue(array $value): string {
+    $sanitized_items = [];
+    foreach ($value as $item) {
+      $sanitized_items[] = $this->sanitizeValue($item);
+    }
+    return '(' . implode(',', $sanitized_items) . ')';
   }
 }

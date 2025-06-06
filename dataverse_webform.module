@@ -52,6 +52,13 @@ function dataverse_webform_theme() {
         'webform_fields' => [],
       ],
     ],
+    'dataverse_webform_submission_log' => [
+      'variables' => [
+        'submissions' => [],
+        'webform_id' => null,
+        'summary' => [],
+      ],
+    ],
   ];
 }
 
@@ -60,29 +67,266 @@ function dataverse_webform_theme() {
  */
 function dataverse_webform_help($route_name, \Drupal\Core\Routing\RouteMatchInterface $route_match) {
   if ($route_name === 'help.page.dataverse_webform') {
-    $output = '<h3>' . t('About') . '</h3>';
-    $output .= '<p>' . t('The Dataverse Webform Integration module allows you to automatically submit webform data to Microsoft Dataverse with support for multi-entity mapping.') . '</p>';
-    
-    $output .= '<h3>' . t('Features') . '</h3>';
-    $output .= '<ul>';
-    $output .= '<li>' . t('Multi-entity mapping support') . '</li>';
-    $output .= '<li>' . t('Secure Azure AD authentication') . '</li>';
-    $output .= '<li>' . t('Field transformation and validation') . '</li>';
-    $output .= '<li>' . t('Queue-based processing for complex submissions') . '</li>';
-    $output .= '<li>' . t('Comprehensive error handling and logging') . '</li>';
-    $output .= '</ul>';
-    
-    $output .= '<h3>' . t('Configuration') . '</h3>';
-    $output .= '<p>' . t('Configure Azure AD credentials using the <a href=":key_url">Key module</a> and then enable Dataverse integration on individual webforms.', [
-      ':key_url' => \Drupal::url('entity.key.collection'),
-    ]) . '</p>';
-    
-    $output .= '<p>' . t('Use the <a href=":test_url">connection test tool</a> to verify your configuration.', [
-      ':test_url' => \Drupal::url('dataverse_webform.test'),
-    ]) . '</p>';
-    
-    return $output;
+    return _dataverse_webform_build_help_content();
   }
   
   return '';
+}
+
+/**
+ * Implements hook_requirements().
+ */
+function dataverse_webform_requirements($phase) {
+  $requirements = [];
+
+  if ($phase === 'runtime') {
+    $requirements += _dataverse_webform_check_module_status();
+    $requirements += _dataverse_webform_check_configuration_status();
+  }
+
+  return $requirements;
+}
+
+/**
+ * Implements hook_cron().
+ */
+function dataverse_webform_cron() {
+  try {
+    _dataverse_webform_process_queue_items();
+    _dataverse_webform_cleanup_old_data();
+  } catch (\Exception $e) {
+    \Drupal::logger('dataverse_webform')->error(
+      'Error during cron processing: @error',
+      ['@error' => $e->getMessage()]
+    );
+  }
+}
+
+/**
+ * Build help content for the module.
+ */
+function _dataverse_webform_build_help_content(): string {
+  $output = '<h3>' . t('About') . '</h3>';
+  $output .= '<p>' . t('The Dataverse Webform Integration module allows you to automatically submit webform data to Microsoft Dataverse with support for multi-entity mapping.') . '</p>';
+  
+  $output .= '<h3>' . t('Features') . '</h3>';
+  $output .= '<ul>';
+  $output .= '<li>' . t('Multi-entity mapping support') . '</li>';
+  $output .= '<li>' . t('Secure Azure AD authentication') . '</li>';
+  $output .= '<li>' . t('Field transformation and validation') . '</li>';
+  $output .= '<li>' . t('Queue-based processing for complex submissions') . '</li>';
+  $output .= '<li>' . t('Comprehensive error handling and logging') . '</li>';
+  $output .= '</ul>';
+  
+  $output .= '<h3>' . t('Configuration') . '</h3>';
+  $output .= '<p>' . t('Configure Azure AD credentials using the <a href=":key_url">Key module</a> and then enable Dataverse integration on individual webforms.', [
+    ':key_url' => \Drupal::url('entity.key.collection'),
+  ]) . '</p>';
+  
+  $output .= '<p>' . t('Use the <a href=":test_url">connection test tool</a> to verify your configuration.', [
+    ':test_url' => \Drupal::url('dataverse_webform.test'),
+  ]) . '</p>';
+  
+  return $output;
+}
+
+/**
+ * Check module status for requirements.
+ */
+function _dataverse_webform_check_module_status(): array {
+  $requirements = [];
+  $module_handler = \Drupal::service('module_handler');
+  
+  $required_modules = [
+    'webform' => 'Webform module',
+    'key' => 'Key module for secure credential storage',
+  ];
+  
+  foreach ($required_modules as $module => $description) {
+    if (!$module_handler->moduleExists($module)) {
+      $requirements["dataverse_webform_{$module}"] = [
+        'title' => t('Dataverse Webform Integration'),
+        'value' => t('@description is required', ['@description' => $description]),
+        'severity' => REQUIREMENT_ERROR,
+      ];
+    }
+  }
+  
+  return $requirements;
+}
+
+/**
+ * Check configuration status for requirements.
+ */
+function _dataverse_webform_check_configuration_status(): array {
+  $requirements = [];
+  
+  $configured_webforms = _dataverse_webform_get_configured_webforms();
+  if (!empty($configured_webforms)) {
+    $count = count($configured_webforms);
+    $requirements['dataverse_webform_configured'] = [
+      'title' => t('Dataverse Webform Integration'),
+      'value' => t('@count webform(s) configured', ['@count' => $count]),
+      'description' => t('Dataverse integration is active on: @forms', [
+        '@forms' => implode(', ', array_keys($configured_webforms)),
+      ]),
+      'severity' => REQUIREMENT_INFO,
+    ];
+    
+    $config_issues = _dataverse_webform_check_configuration_issues();
+    if (!empty($config_issues)) {
+      $requirements['dataverse_webform_config_issues'] = [
+        'title' => t('Dataverse Webform Integration'),
+        'value' => t('Configuration issues detected'),
+        'description' => t('Issues found: @issues', ['@issues' => implode(', ', $config_issues)]),
+        'severity' => REQUIREMENT_WARNING,
+      ];
+    }
+  }
+  
+  return $requirements;
+}
+
+/**
+ * Get webforms configured with Dataverse integration.
+ */
+function _dataverse_webform_get_configured_webforms(): array {
+  $webforms = \Drupal::entityTypeManager()->getStorage('webform')->loadMultiple();
+  $configured_webforms = [];
+  
+  foreach ($webforms as $webform) {
+    $dataverse_config = $webform->getThirdPartySetting('dataverse_webform', 'dataverse_config');
+    if (!empty($dataverse_config['enabled'])) {
+      $configured_webforms[$webform->id()] = $webform->label();
+    }
+  }
+  
+  return $configured_webforms;
+}
+
+/**
+ * Check for configuration issues across all webforms.
+ */
+function _dataverse_webform_check_configuration_issues(): array {
+  $issues = [];
+  $webforms = \Drupal::entityTypeManager()->getStorage('webform')->loadMultiple();
+  
+  foreach ($webforms as $webform) {
+    $dataverse_config = $webform->getThirdPartySetting('dataverse_webform', 'dataverse_config');
+    
+    if (!empty($dataverse_config['enabled'])) {
+      $issues = array_merge($issues, _dataverse_webform_validate_webform_config($webform, $dataverse_config));
+    }
+  }
+  
+  return $issues;
+}
+
+/**
+ * Validate webform configuration.
+ */
+function _dataverse_webform_validate_webform_config($webform, array $config): array {
+  $issues = [];
+  $webform_id = $webform->id();
+  
+  // Check required fields
+  $required_fields = ['azure_tenant_id', 'azure_client_id_key', 'azure_client_secret_key', 'dataverse_url'];
+  foreach ($required_fields as $field) {
+    if (empty($config[$field])) {
+      $issues[] = "Webform {$webform_id}: missing {$field}";
+    }
+  }
+  
+  // Check field mappings
+  if (empty($config['field_mappings'])) {
+    $issues[] = "Webform {$webform_id}: no field mappings configured";
+  }
+  
+  // Validate keys
+  $key_repository = \Drupal::service('key.repository');
+  foreach (['azure_client_id_key', 'azure_client_secret_key'] as $key_field) {
+    if (!empty($config[$key_field]) && !$key_repository->getKey($config[$key_field])) {
+      $issues[] = "Webform {$webform_id}: {$key_field} not found";
+    }
+  }
+  
+  return $issues;
+}
+
+/**
+ * Process queue items during cron.
+ */
+function _dataverse_webform_process_queue_items(): void {
+  $queue_worker_manager = \Drupal::service('plugin.manager.queue_worker');
+  $queue_factory = \Drupal::service('queue');
+  
+  $queue_name = 'dataverse_webform_submissions';
+  $queue = $queue_factory->get($queue_name);
+  $queue_worker = $queue_worker_manager->createInstance($queue_name);
+  
+  $processed = 0;
+  $max_items = 50; // Process up to 50 items per cron run
+  
+  while ($processed < $max_items && ($item = $queue->claimItem())) {
+    try {
+      $queue_worker->processItem($item->data);
+      $queue->deleteItem($item);
+      $processed++;
+    } catch (\Exception $e) {
+      \Drupal::logger('dataverse_webform')->error(
+        'Failed to process queue item: @error',
+        ['@error' => $e->getMessage()]
+      );
+      $queue->releaseItem($item);
+    }
+  }
+  
+  if ($processed > 0) {
+    \Drupal::logger('dataverse_webform')->info(
+      'Processed @count Dataverse submission queue items during cron',
+      ['@count' => $processed]
+    );
+  }
+}
+
+/**
+ * Cleanup old data during cron.
+ */
+function _dataverse_webform_cleanup_old_data(): void {
+  $state = \Drupal::state();
+  $current_time = time();
+  $cutoff_time = $current_time - (7 * 24 * 60 * 60); // 7 days ago
+  
+  // Clean up old retry records
+  $connection = \Drupal::database();
+  $old_retry_keys = $connection->select('key_value', 'kv')
+    ->fields('kv', ['name'])
+    ->condition('collection', 'state')
+    ->condition('name', 'dataverse_webform:retry:%', 'LIKE')
+    ->condition('value', serialize($cutoff_time), '<')
+    ->execute()
+    ->fetchCol();
+  
+  foreach ($old_retry_keys as $key) {
+    $state->delete($key);
+  }
+  
+  // Clean up old rate limit records
+  $rate_limit_keys = $connection->select('key_value', 'kv')
+    ->fields('kv', ['name'])
+    ->condition('collection', 'state')
+    ->condition('name', 'dataverse_webform:rate_limit:%', 'LIKE')
+    ->execute()
+    ->fetchCol();
+  
+  foreach ($rate_limit_keys as $key) {
+    $requests = $state->get($key, []);
+    $filtered_requests = array_filter($requests, fn($time) => $time > ($current_time - 3600));
+    
+    if (empty($filtered_requests)) {
+      $state->delete($key);
+    } else {
+      $state->set($key, $filtered_requests);
+    }
+  }
 }
